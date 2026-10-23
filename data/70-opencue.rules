@@ -1,0 +1,6 @@
+# OpenCUE: let the logged-in desktop user talk to Corsair HID devices (no root needed).
+# Must sort before 73-seat-late.rules for TAG+="uaccess" to take effect.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", TAG+="uaccess"
+
+# Virtual keyboard used by iCUE NEXUS shortcuts.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

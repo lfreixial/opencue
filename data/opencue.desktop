@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenCUE
+GenericName=Corsair device control
+Comment=Fans, pump, RGB lighting, LCD and iCUE NEXUS
+Exec=opencue-gui
+Icon=opencue
+Terminal=false
+Categories=Settings;HardwareSettings;System;
+Keywords=corsair;icue;fan;rgb;aio;lcd;nexus;

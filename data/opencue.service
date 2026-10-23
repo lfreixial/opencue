@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenCUE - Corsair fan, lighting, LCD and Nexus control
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/opencue daemon
+Restart=always
+RestartSec=2
+# Devices are handed back to their built-in hardware mode on stop.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
