@@ -1,0 +1,1008 @@
+import { Button, ComboBox, Slider, Switch, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct ChannelInfo { id: string, name: string, rpm: string, duty: int, connected: bool }
+export struct Zone { id: string, name: string }
+export struct DeviceRow { name: string, detail: string, status: string, ok: bool }
+export struct CurvePoint { t: float, d: float }
+
+// Conversions implemented in Rust.
+export global Util {
+    pure callback hue-color(float) -> color;
+    pure callback parse-hex(string, color) -> color;
+    pure callback to-hex(color) -> string;
+}
+
+global Theme {
+    out property <color> bg: #0f1015;
+    out property <color> side: #15161d;
+    out property <color> card: #1b1c25;
+    out property <color> raised: #242533;
+    out property <color> line: #2d2e3d;
+    out property <color> text: #e8e8ee;
+    out property <color> muted: #8a8b99;
+    out property <color> accent: #00c8ff;
+    out property <color> danger: #ff4d5e;
+    out property <color> ok: #3ddc97;
+}
+
+component Label inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+component Card inherits Rectangle {
+    in property <string> title;
+    background: Theme.card;
+    border-radius: 10px;
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        if root.title != "": Label { text: root.title; }
+        @children
+    }
+}
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> active;
+    callback clicked();
+    height: 40px;
+    border-radius: 8px;
+    background: active ? Theme.raised : ta.has-hover ? #1c1d26 : transparent;
+    HorizontalLayout {
+        padding-left: 12px;
+        spacing: 10px;
+        Rectangle {
+            width: 3px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 2px;
+            background: root.active ? Theme.accent : transparent;
+        }
+        Text { text: root.icon; color: root.active ? Theme.accent : Theme.muted; font-size: 15px; vertical-alignment: center; width: 20px; }
+        Text { text: root.label; color: root.active ? Theme.text : Theme.muted; font-size: 14px; vertical-alignment: center; }
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+component Stat inherits Card {
+    in property <string> value;
+    in property <string> sub;
+    in property <color> tint: Theme.text;
+    Text { text: root.value; color: root.tint; font-size: 34px; font-weight: 700; }
+    Text { text: root.sub; color: Theme.muted; font-size: 12px; overflow: elide; }
+}
+
+component Segmented inherits HorizontalLayout {
+    in property <[string]> items;
+    in-out property <int> current;
+    callback selected(int);
+    spacing: 4px;
+    for item[i] in root.items: Rectangle {
+        height: 32px;
+        min-width: label.preferred-width + 28px;
+        border-radius: 6px;
+        background: i == root.current ? Theme.accent : sta.has-hover ? Theme.line : Theme.raised;
+        label := Text {
+            text: item;
+            color: i == root.current ? #000000 : Theme.text;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        sta := TouchArea {
+            clicked => {
+                root.current = i;
+                root.selected(i);
+            }
+        }
+    }
+}
+
+component ListRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> active;
+    in property <bool> dim;
+    callback clicked();
+    height: 36px;
+    border-radius: 8px;
+    background: active ? Theme.raised : lta.has-hover ? #20212b : transparent;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text { text: root.title; color: root.dim ? Theme.muted : Theme.text; font-size: 14px; vertical-alignment: center; overflow: elide; }
+        Text { text: root.detail; color: Theme.muted; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; }
+    }
+    lta := TouchArea { clicked => { root.clicked(); } }
+}
+
+component ColorField inherits VerticalLayout {
+    in-out property <color> value;
+    callback changed(color);
+    spacing: 8px;
+    vertical-stretch: 0;
+    property <[color]> swatches: [#ffffff, #ff0000, #ff5500, #ffaa00, #ffee00, #88ff00, #00ff44, #00ffaa,
+                                   #00c8ff, #0066ff, #2200ff, #7a00ff, #cc00ff, #ff00aa, #ff4466, #000000];
+    HorizontalLayout {
+        spacing: 8px;
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            border-radius: 18px;
+            background: root.value;
+            border-width: 2px;
+            border-color: Theme.line;
+        }
+        hex := LineEdit {
+            text: Util.to-hex(root.value);
+            accepted(t) => {
+                root.value = Util.parse-hex(t, root.value);
+                root.changed(root.value);
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        for c in root.swatches: Rectangle {
+            height: 20px;
+            border-radius: 4px;
+            background: c;
+            border-width: c == root.value ? 2px : 1px;
+            border-color: c == root.value ? Theme.text : Theme.line;
+            TouchArea {
+                clicked => {
+                    root.value = c;
+                    root.changed(c);
+                }
+            }
+        }
+    }
+    Rectangle {
+        height: 16px;
+        border-radius: 4px;
+        background: @linear-gradient(90deg, #ff0000 0%, #ffff00 16.6%, #00ff00 33.3%, #00ffff 50%, #0000ff 66.6%, #ff00ff 83.3%, #ff0000 100%);
+        hue := TouchArea {
+            function pick() {
+                root.value = Util.hue-color(clamp(self.mouse-x / self.width, 0, 1));
+                root.changed(root.value);
+            }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { self.pick(); }
+            }
+            moved => { if (self.pressed) { self.pick(); } }
+        }
+    }
+}
+
+component SliderRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> unit: "%";
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in-out property <float> value;
+    callback changed(float);
+    spacing: 12px;
+    Text { text: root.label; color: Theme.text; width: 150px; vertical-alignment: center; }
+    Slider {
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value <=> root.value;
+        changed(v) => { root.changed(v); }
+    }
+    Text { text: round(root.value) + root.unit; color: Theme.muted; width: 52px; horizontal-alignment: right; vertical-alignment: center; }
+}
+
+component CurveEditor inherits Rectangle {
+    in property <[CurvePoint]> points;
+    in property <float> t-min;
+    in property <float> t-max;
+    in property <string> path;
+    in property <string> fill-path;
+    in property <float> current-temp;
+    in property <bool> editable;
+    callback point-moved(int, float, float);
+    callback resized(float);
+    // The path is drawn in a viewbox that matches the graph's shape (Path keeps its aspect ratio).
+    out property <float> aspect: graph.height > 0 ? graph.width / graph.height : 1;
+    changed aspect => { root.resized(self.aspect); }
+    init => { root.resized(self.aspect); }
+    background: #13141b;
+    border-radius: 8px;
+    min-height: 260px;
+    property <length> pad-l: 40px;
+    property <length> pad-b: 26px;
+    property <length> pad-t: 12px;
+    property <length> pad-r: 16px;
+    graph := Rectangle {
+        x: root.pad-l;
+        y: root.pad-t;
+        width: root.width - root.pad-l - root.pad-r;
+        height: root.height - root.pad-t - root.pad-b;
+        for g in [0, 25, 50, 75, 100]: Rectangle {
+            y: graph.height * (1 - g / 100) - 0.5px;
+            height: 1px;
+            background: #23242f;
+            Text { x: -34px; y: -7px; text: g + "%"; color: Theme.muted; font-size: 10px; }
+        }
+        for g in 5: Rectangle {
+            x: graph.width * g / 4;
+            width: 1px;
+            background: #1d1e27;
+            Text {
+                x: -12px;
+                y: graph.height + 6px;
+                text: round(root.t-min + (root.t-max - root.t-min) * g / 4) + "°";
+                color: Theme.muted;
+                font-size: 10px;
+            }
+        }
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 1000 * root.aspect;
+            viewbox-height: 1000;
+            commands: root.fill-path;
+            fill: @linear-gradient(180deg, #00c8ff40 0%, #00c8ff05 100%);
+        }
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 1000 * root.aspect;
+            viewbox-height: 1000;
+            commands: root.path;
+            stroke: Theme.accent;
+            stroke-width: 2px;
+        }
+        if root.current-temp >= root.t-min: Rectangle {
+            x: graph.width * clamp((root.current-temp - root.t-min) / (root.t-max - root.t-min), 0, 1);
+            width: 1px;
+            background: #ffaa00;
+            Text { x: 4px; y: 2px; text: round(root.current-temp * 10) / 10 + "°C now"; color: #ffaa00; font-size: 10px; }
+        }
+        for p[i] in root.points: Rectangle {
+            property <length> cx: graph.width * (p.t - root.t-min) / (root.t-max - root.t-min);
+            property <length> cy: graph.height * (1 - p.d / 100);
+            x: self.cx - 9px;
+            y: self.cy - 9px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: pta.pressed ? Theme.text : root.editable ? Theme.accent : #3a6a80;
+            border-width: 3px;
+            border-color: #13141b;
+            pta := TouchArea {
+                enabled: root.editable;
+                mouse-cursor: root.editable ? MouseCursor.grab : MouseCursor.default;
+                moved => {
+                    if (self.pressed) {
+                        root.point-moved(i,
+                            root.t-min + (root.t-max - root.t-min) * (parent.x + self.mouse-x) / graph.width,
+                            100 * (1 - (parent.y + self.mouse-y) / graph.height));
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "OpenCUE";
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    min-width: 960px;
+    min-height: 640px;
+    background: Theme.bg;
+    default-font-size: 14px;
+
+    in-out property <int> page: 0;
+    in property <bool> connected;
+    in property <string> status-text;
+    in property <string> version;
+
+    // profiles
+    in property <[string]> profiles;
+    in-out property <int> profile-index;
+    callback profile-selected(int);
+    callback profile-new();
+    callback profile-delete();
+    callback profile-rename(string);
+    callback start-daemon();
+
+    // dashboard
+    in property <string> liquid-text: "--";
+    in property <string> cpu-text: "--";
+    in property <string> gpu-text: "--";
+    in property <string> cpu-sub;
+    in property <string> gpu-sub;
+    in property <string> pump-text: "--";
+    in property <bool> emergency;
+    in property <[ChannelInfo]> channels;
+    in property <[DeviceRow]> devices;
+
+    // cooling
+    in-out property <int> selected-channel;
+    in property <string> channel-title;
+    in property <bool> is-pump;
+    in-out property <int> fan-mode;
+    in-out property <int> fan-sensor;
+    in-out property <float> fixed-duty;
+    in property <[CurvePoint]> curve-points;
+    in property <float> t-min: 20;
+    in property <float> t-max: 60;
+    in property <string> curve-path;
+    in property <string> curve-fill;
+    in property <float> current-temp: -100;
+    callback channel-selected(int);
+    callback fan-mode-changed(int);
+    callback fan-sensor-changed(int);
+    callback fixed-duty-changed(float);
+    callback point-moved(int, float, float);
+    callback curve-resized(float);
+    callback point-add();
+    callback point-remove();
+    callback apply-to-all-fans();
+
+    // lighting
+    in property <[Zone]> zones;
+    in-out property <int> selected-zone;
+    in property <bool> zone-custom;
+    in property <[string]> effect-names;
+    in-out property <int> effect-index;
+    in-out property <color> color1;
+    in-out property <color> color2;
+    in property <int> color-count;
+    in property <bool> uses-sensor;
+    in-out property <float> speed;
+    in-out property <float> brightness;
+    in-out property <bool> reverse;
+    in-out property <int> light-sensor;
+    in property <[color]> led-preview;
+    callback zone-selected(int);
+    callback zone-custom-toggled(bool);
+    callback lighting-changed();
+
+    // lcd
+    in property <bool> lcd-present;
+    in property <image> lcd-image;
+    in property <[string]> lcd-modes;
+    in-out property <int> lcd-mode;
+    in property <string> lcd-image-name;
+    in-out property <float> lcd-brightness;
+    in-out property <int> lcd-rotation;
+    in-out property <bool> lcd-cover;
+    in-out property <color> lcd-accent;
+    in-out property <string> lcd-text;
+    callback lcd-pick-image();
+    callback lcd-changed();
+
+    // nexus
+    in property <bool> nexus-present;
+    in property <image> nexus-image;
+    in-out property <int> nexus-mode;
+    in-out property <float> nexus-brightness;
+    in property <[string]> nexus-pages;
+    in-out property <int> nexus-page;
+    in property <[string]> nexus-buttons;
+    in-out property <int> nexus-button;
+    in-out property <string> btn-label;
+    in-out property <color> btn-color;
+    in-out property <color> btn-text-color;
+    in property <[string]> action-names;
+    in-out property <int> btn-action;
+    in-out property <string> btn-value;
+    in property <string> btn-value-hint;
+    in property <bool> btn-value-is-media;
+    in property <[string]> media-names;
+    in-out property <int> btn-media-index;
+    in property <bool> btn-value-is-keys;
+    in-out property <bool> recording;
+    callback nexus-changed();
+    callback nexus-page-selected(int);
+    callback nexus-page-add();
+    callback nexus-page-remove();
+    callback nexus-page-rename(string);
+    callback nexus-button-selected(int);
+    callback nexus-button-add();
+    callback nexus-button-remove();
+    callback nexus-button-move(int);
+    callback button-changed();
+    callback btn-action-changed(int);
+    callback nexus-clicked(float);
+    callback key-recorded(string, bool, bool, bool, bool);
+    callback btn-test();
+
+    // settings
+    in-out property <bool> fahrenheit;
+    in-out property <bool> restore-hw;
+    in-out property <bool> autostart;
+    in-out property <float> min-fan;
+    in-out property <float> crit-liquid;
+    in-out property <float> crit-cpu;
+    callback settings-changed();
+    callback autostart-toggled(bool);
+
+    HorizontalLayout {
+        // ---------------------------------------------------------------- sidebar
+        Rectangle {
+            width: 210px;
+            background: Theme.side;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 4px;
+                HorizontalLayout {
+                    padding-bottom: 18px;
+                    padding-left: 6px;
+                    spacing: 10px;
+                    Image { source: @image-url("../../../data/opencue.svg"); width: 30px; height: 30px; }
+                    Text { text: "OpenCUE"; color: Theme.text; font-size: 20px; font-weight: 700; vertical-alignment: center; }
+                }
+                NavItem { label: "Dashboard"; icon: "◉"; active: root.page == 0; clicked => { root.page = 0; } }
+                NavItem { label: "Cooling"; icon: "❄"; active: root.page == 1; clicked => { root.page = 1; } }
+                NavItem { label: "Lighting"; icon: "✦"; active: root.page == 2; clicked => { root.page = 2; } }
+                NavItem { label: "Pump LCD"; icon: "◐"; active: root.page == 3; clicked => { root.page = 3; } }
+                NavItem { label: "iCUE Nexus"; icon: "▭"; active: root.page == 4; clicked => { root.page = 4; } }
+                NavItem { label: "Settings"; icon: "⚙"; active: root.page == 5; clicked => { root.page = 5; } }
+                Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                Rectangle {
+                    height: 54px;
+                    border-radius: 8px;
+                    background: root.connected ? #16261f : #2a1619;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 2px;
+                        Text { text: root.connected ? "● Daemon running" : "● Daemon offline"; color: root.connected ? Theme.ok : Theme.danger; font-size: 12px; font-weight: 600; }
+                        Text { text: root.status-text; color: Theme.muted; font-size: 11px; overflow: elide; }
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------- main area
+        VerticalLayout {
+            padding: 20px;
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: root.page == 0 ? "Dashboard" : root.page == 1 ? "Cooling" : root.page == 2 ? "Lighting"
+                        : root.page == 3 ? "Pump LCD" : root.page == 4 ? "iCUE Nexus" : "Settings";
+                    color: Theme.text;
+                    font-size: 24px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                Text { text: "Profile"; color: Theme.muted; vertical-alignment: center; }
+                ComboBox {
+                    width: 180px;
+                    model: root.profiles;
+                    current-index <=> root.profile-index;
+                    selected => { root.profile-selected(self.current-index); }
+                }
+                Button { text: "New"; clicked => { root.profile-new(); } }
+                Button { text: "Rename"; clicked => { rename-popup.show(); } }
+                Button { text: "Delete"; enabled: root.profiles.length > 1; clicked => { root.profile-delete(); } }
+            }
+
+            rename-popup := PopupWindow {
+                x: root.width - 480px;
+                y: 60px;
+                width: 300px;
+                close-policy: close-on-click-outside;
+                Rectangle {
+                    background: Theme.raised;
+                    border-radius: 8px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Label { text: "Rename profile (Enter to save)"; }
+                        LineEdit {
+                            text: root.profiles[root.profile-index];
+                            accepted(t) => {
+                                root.profile-rename(t);
+                                rename-popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !root.connected: Rectangle {
+                height: 48px;
+                border-radius: 8px;
+                background: #2a1619;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 8px;
+                    spacing: 10px;
+                    Text { text: "The OpenCUE daemon isn't running, so changes can't reach your devices."; color: Theme.text; vertical-alignment: center; }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    Button { text: "Start daemon"; primary: true; clicked => { root.start-daemon(); } }
+                }
+            }
+            if root.emergency: Rectangle {
+                height: 40px;
+                border-radius: 8px;
+                background: #3a1419;
+                Text { text: "Critical temperature: all fans and the pump are forced to 100%"; color: Theme.danger; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            }
+
+            // ======================================================== Dashboard
+            if root.page == 0: VerticalLayout {
+                spacing: 16px;
+                HorizontalLayout {
+                    spacing: 16px;
+                    Stat { title: "LIQUID"; value: root.liquid-text; sub: root.pump-text; tint: Theme.accent; }
+                    Stat { title: "CPU"; value: root.cpu-text; sub: root.cpu-sub; }
+                    Stat { title: "GPU"; value: root.gpu-text; sub: root.gpu-sub; }
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Card {
+                        title: "PUMP & FANS";
+                        for ch in root.channels: HorizontalLayout {
+                            spacing: 12px;
+                            height: 28px;
+                            Text { text: ch.name; color: ch.connected ? Theme.text : Theme.muted; width: 70px; vertical-alignment: center; }
+                            Rectangle {
+                                height: 8px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 4px;
+                                background: Theme.raised;
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * ch.duty / 100;
+                                    border-radius: 4px;
+                                    background: Theme.accent;
+                                }
+                            }
+                            Text { text: ch.connected ? ch.rpm + " RPM" : "not connected"; color: Theme.muted; width: 100px; horizontal-alignment: right; vertical-alignment: center; }
+                            Text { text: ch.connected ? ch.duty + "%" : ""; color: Theme.text; width: 40px; horizontal-alignment: right; vertical-alignment: center; }
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    }
+                    Card {
+                        title: "DEVICES";
+                        width: 380px;
+                        for d in root.devices: HorizontalLayout {
+                            spacing: 10px;
+                            Rectangle { width: 8px; height: 8px; y: 8px; border-radius: 4px; background: d.ok ? Theme.ok : Theme.danger; }
+                            VerticalLayout {
+                                Text { text: d.name; color: Theme.text; }
+                                Text { text: d.detail; color: Theme.muted; font-size: 11px; }
+                                if !d.ok: Text { text: d.status; color: Theme.danger; font-size: 11px; wrap: word-wrap; }
+                            }
+                        }
+                        if root.devices.length == 0: Text { text: "No Corsair devices found."; color: Theme.muted; }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    }
+                }
+            }
+
+            // ======================================================== Cooling
+            if root.page == 1: HorizontalLayout {
+                spacing: 16px;
+                Card {
+                    title: "CHANNELS";
+                    width: 230px;
+                    for ch[i] in root.channels: ListRow {
+                        title: ch.name;
+                        detail: ch.connected ? ch.rpm + " RPM" : "—";
+                        dim: !ch.connected;
+                        active: i == root.selected-channel;
+                        clicked => {
+                            root.selected-channel = i;
+                            root.channel-selected(i);
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                }
+                Card {
+                    title: root.channel-title;
+                    Segmented {
+                        items: ["Quiet", "Balanced", "Performance", "Max", "Fixed", "Custom"];
+                        current <=> root.fan-mode;
+                        selected(i) => { root.fan-mode-changed(i); }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Follow sensor"; color: Theme.text; vertical-alignment: center; }
+                        ComboBox {
+                            width: 200px;
+                            enabled: root.fan-mode != 4;
+                            model: ["Liquid temperature", "CPU temperature", "GPU temperature"];
+                            current-index <=> root.fan-sensor;
+                            selected => { root.fan-sensor-changed(self.current-index); }
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                        if root.fan-mode == 5: Button { text: "+ Point"; clicked => { root.point-add(); } }
+                        if root.fan-mode == 5: Button { text: "− Point"; clicked => { root.point-remove(); } }
+                    }
+                    if root.fan-mode == 4: SliderRow {
+                        label: "Fixed speed";
+                        minimum: root.is-pump ? 50 : 0;
+                        value <=> root.fixed-duty;
+                        changed(v) => { root.fixed-duty-changed(v); }
+                    }
+                    CurveEditor {
+                        vertical-stretch: 1;
+                        points: root.curve-points;
+                        t-min: root.t-min;
+                        t-max: root.t-max;
+                        path: root.curve-path;
+                        fill-path: root.curve-fill;
+                        current-temp: root.current-temp;
+                        editable: root.fan-mode == 5;
+                        point-moved(i, t, d) => { root.point-moved(i, t, d); }
+                        resized(a) => { root.curve-resized(a); }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: root.fan-mode == 5 ? "Drag the points to shape the curve." : root.is-pump ? "The pump never runs below 50%." : "Pick Custom to draw your own curve.";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                        if !root.is-pump: Button { text: "Apply to all fans"; clicked => { root.apply-to-all-fans(); } }
+                    }
+                }
+            }
+
+            // ======================================================== Lighting
+            if root.page == 2: HorizontalLayout {
+                spacing: 16px;
+                Card {
+                    title: "ZONES";
+                    width: 260px;
+                    for z[i] in root.zones: ListRow {
+                        title: z.name;
+                        active: i == root.selected-zone;
+                        clicked => {
+                            root.selected-zone = i;
+                            root.zone-selected(i);
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                }
+                Card {
+                    title: "EFFECT";
+                    if root.selected-zone > 0: HorizontalLayout {
+                        spacing: 10px;
+                        Switch {
+                            text: "Custom lighting for this zone";
+                            checked: root.zone-custom;
+                            toggled => { root.zone-custom-toggled(self.checked); }
+                        }
+                    }
+                    if root.selected-zone > 0 && !root.zone-custom: Text {
+                        text: "This zone follows the “All devices” settings.";
+                        color: Theme.muted;
+                    }
+                    if root.selected-zone == 0 || root.zone-custom: VerticalLayout {
+                        spacing: 14px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Effect"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.effect-names;
+                                current-index <=> root.effect-index;
+                                selected => { root.lighting-changed(); }
+                            }
+                        }
+                        if root.color-count >= 1: HorizontalLayout {
+                            spacing: 16px;
+                            vertical-stretch: 0;
+                            VerticalLayout {
+                                spacing: 6px;
+                                vertical-stretch: 0;
+                                Label { text: root.color-count >= 2 ? "PRIMARY COLOR" : "COLOR"; }
+                                ColorField { value <=> root.color1; changed => { root.lighting-changed(); } }
+                            }
+                            if root.color-count >= 2: VerticalLayout {
+                                spacing: 6px;
+                                vertical-stretch: 0;
+                                Label { text: "SECONDARY COLOR"; }
+                                ColorField { value <=> root.color2; changed => { root.lighting-changed(); } }
+                            }
+                        }
+                        if root.uses-sensor: HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Sensor"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                            ComboBox {
+                                model: ["Liquid temperature", "CPU temperature", "GPU temperature"];
+                                current-index <=> root.light-sensor;
+                                selected => { root.lighting-changed(); }
+                            }
+                        }
+                        SliderRow { label: "Speed"; minimum: 1; value <=> root.speed; changed => { root.lighting-changed(); } }
+                        SliderRow { label: "Brightness"; value <=> root.brightness; changed => { root.lighting-changed(); } }
+                        CheckBox { text: "Reverse direction"; checked <=> root.reverse; toggled => { root.lighting-changed(); } }
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    Label { text: "PREVIEW"; }
+                    Rectangle {
+                        height: 44px;
+                        border-radius: 8px;
+                        background: #0b0b10;
+                        HorizontalLayout {
+                            padding: 10px;
+                            spacing: 4px;
+                            alignment: center;
+                            for c in root.led-preview: Rectangle {
+                                width: 22px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: c;
+                                drop-shadow-blur: 8px;
+                                drop-shadow-color: c;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ======================================================== LCD
+            if root.page == 3: HorizontalLayout {
+                spacing: 16px;
+                Card {
+                    title: "PREVIEW";
+                    width: 340px;
+                    Rectangle {
+                        width: 300px;
+                        height: 300px;
+                        border-radius: 150px;
+                        clip: true;
+                        background: #000000;
+                        border-width: 4px;
+                        border-color: #2b2c38;
+                        Image { width: 100%; height: 100%; source: root.lcd-image; image-fit: fill; }
+                    }
+                    if !root.lcd-present: Text {
+                        text: "No pump LCD detected; showing a preview only.";
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                }
+                Card {
+                    title: "SCREEN";
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Show"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                        ComboBox {
+                            model: root.lcd-modes;
+                            current-index <=> root.lcd-mode;
+                            selected => { root.lcd-changed(); }
+                        }
+                    }
+                    if root.lcd-mode == 0: HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Image / GIF"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                        Text { text: root.lcd-image-name == "" ? "none selected" : root.lcd-image-name; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                        Button { text: "Choose…"; primary: true; clicked => { root.lcd-pick-image(); } }
+                    }
+                    if root.lcd-mode == 0: CheckBox { text: "Crop to fill the circle"; checked <=> root.lcd-cover; toggled => { root.lcd-changed(); } }
+                    if root.lcd-mode == 7: HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Text"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                        LineEdit { text <=> root.lcd-text; edited => { root.lcd-changed(); } }
+                    }
+                    if root.lcd-mode != 0: VerticalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 0;
+                        Label { text: "ACCENT COLOR"; }
+                        ColorField { value <=> root.lcd-accent; changed => { root.lcd-changed(); } }
+                    }
+                    SliderRow { label: "Brightness"; value <=> root.lcd-brightness; changed => { root.lcd-changed(); } }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Rotation"; color: Theme.text; width: 110px; vertical-alignment: center; }
+                        ComboBox {
+                            model: ["0°", "90°", "180°", "270°"];
+                            current-index <=> root.lcd-rotation;
+                            selected => { root.lcd-changed(); }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                }
+            }
+
+            // ======================================================== Nexus
+            if root.page == 4: VerticalLayout {
+                spacing: 16px;
+                Card {
+                    title: root.nexus-present ? "NEXUS · click a button to edit it" : "NEXUS (not detected; preview only)";
+                    Rectangle {
+                        height: 72px;
+                        border-radius: 6px;
+                        background: #000000;
+                        Image {
+                            width: min(parent.width, 960px);
+                            height: self.width * 48 / 640;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            source: root.nexus-image;
+                            image-fit: fill;
+                            TouchArea { clicked => { root.nexus-clicked(self.mouse-x / self.width); } }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: "Mode"; color: Theme.text; vertical-alignment: center; }
+                        Segmented {
+                            items: ["Buttons", "System info", "Clock"];
+                            current <=> root.nexus-mode;
+                            selected => { root.nexus-changed(); }
+                        }
+                        Rectangle { width: 20px; }
+                        SliderRow { label: "Brightness"; value <=> root.nexus-brightness; changed => { root.nexus-changed(); } }
+                    }
+                }
+                if root.nexus-mode == 0: HorizontalLayout {
+                    spacing: 16px;
+                    Card {
+                        title: "PAGES";
+                        width: 220px;
+                        for p[i] in root.nexus-pages: ListRow {
+                            title: p;
+                            active: i == root.nexus-page;
+                            clicked => {
+                                root.nexus-page = i;
+                                root.nexus-page-selected(i);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "Add"; clicked => { root.nexus-page-add(); } }
+                            Button { text: "Remove"; enabled: root.nexus-pages.length > 1; clicked => { root.nexus-page-remove(); } }
+                        }
+                        LineEdit {
+                            placeholder-text: "Rename page (Enter)";
+                            accepted(t) => { root.nexus-page-rename(t); }
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    }
+                    Card {
+                        title: "BUTTONS";
+                        width: 220px;
+                        for b[i] in root.nexus-buttons: ListRow {
+                            title: b;
+                            active: i == root.nexus-button;
+                            clicked => {
+                                root.nexus-button = i;
+                                root.nexus-button-selected(i);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "Add"; enabled: root.nexus-buttons.length < 8; clicked => { root.nexus-button-add(); } }
+                            Button { text: "Remove"; enabled: root.nexus-buttons.length > 1; clicked => { root.nexus-button-remove(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "◀ Move"; clicked => { root.nexus-button-move(-1); } }
+                            Button { text: "Move ▶"; clicked => { root.nexus-button-move(1); } }
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    }
+                    Card {
+                        title: "BUTTON";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Label"; color: Theme.text; width: 90px; vertical-alignment: center; }
+                            LineEdit { text <=> root.btn-label; edited => { root.button-changed(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Action"; color: Theme.text; width: 90px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.action-names;
+                                current-index <=> root.btn-action;
+                                selected => { root.btn-action-changed(self.current-index); }
+                            }
+                        }
+                        if root.btn-value-is-media: HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Media key"; color: Theme.text; width: 90px; vertical-alignment: center; }
+                            ComboBox {
+                                model: root.media-names;
+                                current-index <=> root.btn-media-index;
+                                selected => { root.button-changed(); }
+                            }
+                        }
+                        if root.btn-value-hint != "" && !root.btn-value-is-media: HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Value"; color: Theme.text; width: 90px; vertical-alignment: center; }
+                            LineEdit {
+                                text <=> root.btn-value;
+                                placeholder-text: root.btn-value-hint;
+                                edited => { root.button-changed(); }
+                            }
+                            if root.btn-value-is-keys: Button {
+                                text: root.recording ? "Press keys…" : "Record";
+                                primary: root.recording;
+                                clicked => {
+                                    root.recording = !root.recording;
+                                    if (root.recording) { recorder.focus(); }
+                                }
+                            }
+                        }
+                        recorder := FocusScope {
+                            width: 0px;
+                            height: 0px;
+                            enabled: root.recording;
+                            key-pressed(e) => {
+                                if (!root.recording) { return reject; }
+                                if (e.text == Key.Shift || e.text == Key.Control || e.text == Key.Alt || e.text == Key.Meta) { return accept; }
+                                root.key-recorded(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+                                root.recording = false;
+                                accept
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 16px;
+                            vertical-stretch: 0;
+                            VerticalLayout {
+                                spacing: 6px;
+                                vertical-stretch: 0;
+                                Label { text: "BUTTON COLOR"; }
+                                ColorField { value <=> root.btn-color; changed => { root.button-changed(); } }
+                            }
+                            VerticalLayout {
+                                spacing: 6px;
+                                vertical-stretch: 0;
+                                Label { text: "TEXT COLOR"; }
+                                ColorField { value <=> root.btn-text-color; changed => { root.button-changed(); } }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                        HorizontalLayout {
+                            Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                            Button { text: "Test action"; clicked => { root.btn-test(); } }
+                        }
+                    }
+                }
+            }
+
+            // ======================================================== Settings
+            if root.page == 5: HorizontalLayout {
+                spacing: 16px;
+                Card {
+                    title: "GENERAL";
+                    Switch { text: "Start OpenCUE when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
+                    Switch { text: "Show temperatures in Fahrenheit"; checked <=> root.fahrenheit; toggled => { root.settings-changed(); } }
+                    Switch { text: "Hand devices back to hardware mode when OpenCUE stops"; checked <=> root.restore-hw; toggled => { root.settings-changed(); } }
+                    Text {
+                        text: "In hardware mode the AIO follows its built-in fan curve and default lighting, so it stays safe even if OpenCUE isn't running.";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                }
+                Card {
+                    title: "SAFETY";
+                    SliderRow { label: "Minimum fan speed"; value <=> root.min-fan; changed => { root.settings-changed(); } }
+                    SliderRow { label: "Critical liquid"; unit: "°C"; minimum: 40; maximum: 70; value <=> root.crit-liquid; changed => { root.settings-changed(); } }
+                    SliderRow { label: "Critical CPU"; unit: "°C"; minimum: 70; maximum: 105; value <=> root.crit-cpu; changed => { root.settings-changed(); } }
+                    Text {
+                        text: "Above either critical temperature, every fan and the pump run at 100% until things cool down. If a sensor stops reporting, the fans that follow it also go to 100%.";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                    Text { text: "OpenCUE " + root.version + " · GPL-3.0"; color: Theme.muted; font-size: 11px; }
+                }
+            }
+        }
+    }
+}
