@@ -1,0 +1,19 @@
+[package]
+name = "opencue"
+description = "OpenCUE daemon and CLI: open-source Corsair iCUE replacement for Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+anyhow = "1.0.104"
+env_logger = "0.11.11"
+evdev = "0.13.2"
+libc = "0.2.191"
+log = "0.4.34"
+opencue-core = { version = "0.1.0", path = "../opencue-core" }
+serde_json = "1.0.154"
+signal-hook = "0.4.5"
