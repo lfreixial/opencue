@@ -1,0 +1,22 @@
+[package]
+name = "opencue-gui"
+description = "OpenCUE desktop app: control Corsair fans, RGB, pump LCD and iCUE NEXUS on Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+anyhow = "1.0.104"
+env_logger = "0.11.11"
+image = { version = "0.25.10", default-features = false }
+log = "0.4.34"
+opencue-core = { version = "0.1.0", path = "../opencue-core" }
+rfd = "0.17.2"
+serde_json = "1.0.154"
+slint = { version = "1.18.1", features = ["software-renderer-systemfonts"] }
+
+[build-dependencies]
+slint-build = "1.18.1"
