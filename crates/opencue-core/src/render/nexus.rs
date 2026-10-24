@@ -37,6 +37,11 @@ pub fn button_at(x: u16, n: usize) -> Option<usize> {
 }
 
 fn rounded_rect(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, r: f32, c: [u8; 3]) {
+    // A shape narrower than its corners (a nearly empty progress bar) is all corner.
+    let r = r.min((x1 - x0) as f32 / 2.0).min((y1 - y0) as f32 / 2.0);
+    if r < 0.0 {
+        return;
+    }
     for y in y0..y1 {
         for x in x0..x1 {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -271,7 +276,7 @@ fn draw_rounded_image(img: &mut RgbaImage, src: &RgbaImage, x0: i32, y0: i32, r:
 /// Cover art scaled for the strip; the last image is cached so redraws don't decode it again.
 fn cover(path: &str) -> Option<RgbaImage> {
     static CACHE: Mutex<Option<(String, Option<RgbaImage>)>> = Mutex::new(None);
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.as_ref().is_none_or(|(p, _)| p != path) {
         let img = image::ImageReader::open(path)
             .ok()
@@ -304,6 +309,31 @@ mod tests {
         assert_eq!(media_control_at(639), Some(4));
         let middle = CONTROLS_X0 + 2 * (CONTROL_W + GAP) + CONTROL_W / 2;
         assert_eq!(media_control_at(middle as u16), Some(2));
+    }
+
+    #[test]
+    fn tiny_shapes_do_not_panic() {
+        let mut img = solid(WIDTH, HEIGHT, [0, 0, 0]);
+        for w in 0..4 {
+            rounded_rect(&mut img, 10, 38, 10 + w, 41, 1.5, [255, 255, 255]);
+        }
+        rounded_rect(&mut img, 10, 10, 5, 5, 3.0, [255, 255, 255]);
+    }
+
+    #[test]
+    fn media_renders_at_every_position() {
+        let cfg = NexusConfig { mode: NexusMode::Media, ..Default::default() };
+        for pos in [0, 1, 300_000, 1_000_000, 199_000_000, 200_000_000, 250_000_000] {
+            let np = NowPlaying {
+                title: "t".into(),
+                length_us: Some(200_000_000),
+                position_us: pos,
+                rate: 1.0,
+                ..Default::default()
+            };
+            let t = Telemetry { now_playing: Some(np), ..Default::default() };
+            render(&cfg, 0, None, &t, false);
+        }
     }
 
     #[test]

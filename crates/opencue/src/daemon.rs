@@ -725,12 +725,22 @@ fn spawn_worker(sh: &Arc<Shared>, f: Found, has_lcd: bool) -> Result<Worker> {
     let handle = {
         let (sh, done) = (sh.clone(), done.clone());
         thread::Builder::new().name(key.clone()).spawn(move || {
-            let res = match f.kind {
+            // A panic is treated like any other error, so the device is reopened instead of
+            // freezing until the daemon restarts.
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match f.kind {
                 Kind::CommanderCore => run_commander_core(&sh, &f, has_lcd),
                 Kind::LcdCap => run_lcd(&sh, &f),
                 Kind::Nexus => run_nexus(&sh, &f),
                 Kind::Mm700 => run_mm700(&sh, &f),
-            };
+            }))
+            .unwrap_or_else(|panic| {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".into());
+                Err(anyhow!("crashed: {msg}"))
+            });
             match res {
                 Ok(()) => sh.remove_device(&key),
                 Err(e) => sh.device_error(&f, Some(format!("{e:#}"))),
