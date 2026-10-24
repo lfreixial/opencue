@@ -57,11 +57,16 @@ impl Nexus {
 
     pub fn write_rgba(&self, rgba: &[u8]) -> Result<()> {
         assert_eq!(rgba.len(), (WIDTH * HEIGHT * 4) as usize, "Nexus frame must be 640x48 RGBA");
-        for p in frame_packets(rgba, 0x40) {
+        for p in frame_packets(&to_bgra(rgba), 0x40) {
             self.dev.write(&p)?;
         }
         Ok(())
     }
+}
+
+/// The panel takes pixels in BGRA order.
+fn to_bgra(rgba: &[u8]) -> Vec<u8> {
+    rgba.as_chunks::<4>().0.iter().flat_map(|&[r, g, b, a]| [b, g, r, a]).collect()
 }
 
 impl NexusTouch {
@@ -71,5 +76,15 @@ impl NexusTouch {
             return Ok(None);
         }
         Ok(Some(Touch { pressed: d[5] == 1, x: u16::from_le_bytes([d[6], d[7]]) }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swaps_red_and_blue() {
+        assert_eq!(to_bgra(&[255, 10, 0, 255, 1, 2, 3, 4]), [0, 10, 255, 255, 3, 2, 1, 4]);
     }
 }
