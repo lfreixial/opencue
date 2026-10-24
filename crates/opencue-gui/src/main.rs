@@ -36,11 +36,14 @@ const ACTIONS: [&str; 9] = [
     "Change Nexus page",
     "Cycle LCD screen",
 ];
-const MEDIA: [(&str, &str); 7] = [
+const MEDIA: [(&str, &str); 10] = [
     ("play_pause", "Play / Pause"),
     ("next", "Next track"),
     ("previous", "Previous track"),
+    ("forward", "Forward 10 s"),
+    ("rewind", "Rewind 10 s"),
     ("stop", "Stop"),
+    ("switch_player", "Switch media player"),
     ("volume_up", "Volume up"),
     ("volume_down", "Volume down"),
     ("mute", "Mute"),
@@ -497,6 +500,7 @@ fn sync_nexus(ui: &AppWindow) {
             NexusMode::Buttons => 0,
             NexusMode::Sysinfo => 1,
             NexusMode::Clock => 2,
+            NexusMode::Media => 3,
         });
         ui.set_nexus_brightness(nx.brightness as f32);
         ui.set_nexus_pages(strings(
@@ -1057,7 +1061,8 @@ fn main() -> anyhow::Result<()> {
     let w = ui.as_weak();
     ui.on_nexus_changed(move || {
         let ui = w.unwrap();
-        let mode = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock][ui.get_nexus_mode().clamp(0, 2) as usize];
+        let modes = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock, NexusMode::Media];
+        let mode = modes[ui.get_nexus_mode().clamp(0, modes.len() as i32 - 1) as usize];
         let brightness = ui.get_nexus_brightness().round().clamp(0.0, 100.0) as u8;
         edit(
             &ui,
@@ -1228,11 +1233,20 @@ fn main() -> anyhow::Result<()> {
     let w = ui.as_weak();
     ui.on_nexus_clicked(move |frac| {
         let ui = w.unwrap();
+        let x = (frac.clamp(0.0, 1.0) * 639.0) as u16;
+        if ui.get_nexus_mode() == 3 {
+            // Same as touching the strip: control the player.
+            let cmd = render::nexus::media_control_at(x).map_or("switch_player", |i| render::nexus::MEDIA_CONTROLS[i]);
+            with_app(|app| {
+                let _ = app.tx.send(Request::RunAction(Action::Media(cmd.into())));
+            });
+            return;
+        }
         if ui.get_nexus_mode() != 0 {
             return;
         }
         let n = ui.get_nexus_buttons().row_count();
-        if let Some(i) = render::nexus::button_at((frac.clamp(0.0, 1.0) * 639.0) as u16, n) {
+        if let Some(i) = render::nexus::button_at(x, n) {
             ui.set_nexus_button(i as i32);
             sync_nexus(&ui);
         }

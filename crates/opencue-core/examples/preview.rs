@@ -2,7 +2,7 @@
 
 use opencue_core::config::{LcdConfig, LcdMode, NexusConfig, NexusMode};
 use opencue_core::render::{lcd, nexus};
-use opencue_core::telemetry::{ChannelState, Telemetry};
+use opencue_core::telemetry::{ChannelState, NowPlaying, Telemetry};
 
 fn main() {
     let out = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
@@ -17,7 +17,20 @@ fn main() {
         let cfg = LcdConfig { mode, ..Default::default() };
         lcd::render(&cfg, &t, false).save(out.join(format!("lcd_{mode:?}.png"))).unwrap();
     }
-    for (i, mode) in [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock].into_iter().enumerate() {
+    t.now_playing = Some(NowPlaying {
+        player: "Spotify".into(),
+        title: "Song Title".into(),
+        artist: "Artist".into(),
+        album: "Album".into(),
+        playing: true,
+        length_us: Some(214_000_000),
+        position_us: 83_000_000,
+        rate: 1.0,
+        players: 1,
+        ..Default::default()
+    });
+    let modes = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock, NexusMode::Media];
+    for (i, mode) in modes.into_iter().enumerate() {
         let cfg = NexusConfig { mode, ..Default::default() };
         nexus::render(&cfg, 0, Some(1), &t, false).save(out.join(format!("nexus_{i}_{mode:?}.png"))).unwrap();
     }

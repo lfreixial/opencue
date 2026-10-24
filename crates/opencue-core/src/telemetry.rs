@@ -46,6 +46,48 @@ pub struct Telemetry {
     /// Bumped whenever the daemon's config changes (GUI uses it to refetch).
     #[serde(default)]
     pub config_rev: u64,
+    /// What the chosen media player is playing (only tracked while the Nexus shows it).
+    #[serde(default)]
+    pub now_playing: Option<NowPlaying>,
+}
+
+/// A snapshot of an MPRIS media player.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NowPlaying {
+    /// Player name, e.g. "Spotify".
+    pub player: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    /// Local file holding the cover art, once it has been fetched.
+    pub art: Option<String>,
+    pub playing: bool,
+    pub length_us: Option<u64>,
+    /// Position when sampled; see [`NowPlaying::position_us`].
+    pub position_us: u64,
+    pub rate: f64,
+    /// Unix time in milliseconds when `position_us` was read.
+    pub sampled_ms: u64,
+    /// How many players are available (tap the track info to switch).
+    pub players: usize,
+}
+
+impl NowPlaying {
+    /// The playback position now, extrapolated from the last sample.
+    pub fn position_now_us(&self) -> u64 {
+        let mut pos = self.position_us as f64;
+        if self.playing {
+            let elapsed_ms = unix_ms().saturating_sub(self.sampled_ms) as f64;
+            pos += elapsed_ms * 1000.0 * self.rate;
+        }
+        let pos = pos.max(0.0) as u64;
+        self.length_us.map_or(pos, |l| pos.min(l))
+    }
+}
+
+pub fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 impl Telemetry {

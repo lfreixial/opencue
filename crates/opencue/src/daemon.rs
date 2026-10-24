@@ -15,7 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use opencue_core::config::{Action, Config, LcdMode, Profile, Sensor};
+use opencue_core::config::{Action, Config, LcdMode, NexusMode, Profile, Sensor};
 use opencue_core::cooling::{DutyController, curve};
 use opencue_core::devices::commander_core::{self, CommanderCore, channel_name, led_device_name};
 use opencue_core::devices::lcd_cap::LcdCap;
@@ -28,7 +28,7 @@ use opencue_core::render;
 use opencue_core::sensors::{SensorReader, SystemSensors};
 use opencue_core::telemetry::{ChannelState, DeviceState, LightingZone, Telemetry};
 
-use crate::actions;
+use crate::{actions, media};
 
 /// A gap this long between loop iterations means the machine was suspended.
 const RESUME_GAP: Duration = Duration::from_secs(5);
@@ -41,6 +41,8 @@ pub struct Shared {
     stop: Arc<AtomicBool>,
     rescan: AtomicBool,
     nexus_page: AtomicUsize,
+    /// Media commands for the MPRIS thread.
+    media: mpsc::Sender<String>,
     epoch: Instant,
 }
 
@@ -425,6 +427,7 @@ fn run_nexus(sh: &Arc<Shared>, found: &Found) -> Result<()> {
 fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) -> Result<()> {
     let mut brightness = None;
     let mut pressed: Option<usize> = None;
+    let mut touching = false;
     let mut next_render = Instant::now();
     let mut seen_rev = u64::MAX;
     let mut seen_page = usize::MAX;
@@ -447,7 +450,9 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
             let t = sh.telemetry(|t| t.clone());
             let img = render::nexus::render(nx, page, pressed, &t, cfg.settings.fahrenheit);
             nexus.write_rgba(img.as_raw())?;
-            next_render = Instant::now() + Duration::from_secs(1);
+            // The progress bar moves, and track changes should show up quickly.
+            let every = if nx.mode == NexusMode::Media { Duration::from_millis(500) } else { Duration::from_secs(1) };
+            next_render = Instant::now() + every;
         }
 
         match touches
@@ -455,8 +460,15 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
         {
             Ok(ev) => {
                 log::debug!("Nexus touch: pressed={} x={}", ev.pressed, ev.x);
-                if ev.pressed && pressed.is_none() {
-                    if nx.mode == opencue_core::config::NexusMode::Buttons {
+                if ev.pressed && !touching {
+                    touching = true;
+                    if nx.mode == NexusMode::Media {
+                        let control = render::nexus::media_control_at(ev.x);
+                        let cmd = control.map_or("switch_player", |i| render::nexus::MEDIA_CONTROLS[i]);
+                        log::info!("Nexus: media '{cmd}' (touch x={})", ev.x);
+                        pressed = control;
+                        let _ = sh.media.send(cmd.into());
+                    } else if nx.mode == NexusMode::Buttons {
                         let buttons = &nx.pages[page].buttons;
                         if let Some(i) = render::nexus::button_at(ev.x, buttons.len()) {
                             log::info!("Nexus: '{}' pressed (touch x={})", buttons[i].label, ev.x);
@@ -471,7 +483,8 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
                         }
                     }
                     next_render = Instant::now();
-                } else if !ev.pressed && pressed.is_some() {
+                } else if !ev.pressed && touching {
+                    touching = false;
                     pressed = None;
                     next_render = Instant::now();
                 }
@@ -487,8 +500,13 @@ pub fn perform(sh: &Shared, action: &Action) -> Result<()> {
     match action {
         Action::None => Ok(()),
         Action::Keys(combo) => actions::press_combo(&actions::parse_combo(combo)?),
-        Action::Media(key) => {
+        // Volume is the system's; everything else goes to the media player.
+        Action::Media(key) if matches!(key.as_str(), "volume_up" | "volume_down" | "mute") => {
             actions::press_combo(&[actions::key_code(key).ok_or_else(|| anyhow!("unknown media key {key}"))?])
+        }
+        Action::Media(cmd) => {
+            sh.media.send(cmd.clone()).map_err(|_| anyhow!("media thread stopped"))?;
+            Ok(())
         }
         Action::Command(cmd) => actions::run_command(cmd),
         Action::Url(url) => actions::open_url(url),
@@ -581,6 +599,50 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Media players (MPRIS)
+
+/// Tracks the active player while the Nexus shows it, and runs media commands at any time.
+/// Without any player, commands fall back to media key presses.
+fn run_media(sh: &Shared, commands: mpsc::Receiver<String>) {
+    let mut mpris = media::Mpris::new();
+    let mut tracking = false;
+    while !sh.stopping() {
+        let active = sh.config().nexus.mode == NexusMode::Media;
+        let wait = if active { Duration::from_millis(500) } else { Duration::from_secs(1) };
+        let cmd = match commands.recv_timeout(wait) {
+            Ok(cmd) => Some(cmd),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        if !active && cmd.is_none() {
+            if tracking {
+                sh.telemetry(|t| t.now_playing = None);
+                tracking = false;
+            }
+            continue;
+        }
+        mpris.refresh();
+        if let Some(cmd) = cmd {
+            let res = if mpris.has_player() || cmd == "switch_player" {
+                mpris.command(&cmd)
+            } else {
+                actions::key_code(&cmd)
+                    .ok_or_else(|| anyhow!("no media player is running"))
+                    .and_then(|k| actions::press_combo(&[k]))
+            };
+            if let Err(e) = res {
+                log::warn!("media '{cmd}': {e:#}");
+            }
+        }
+        if active {
+            let np = mpris.now_playing();
+            sh.telemetry(|t| t.now_playing = np);
+            tracking = true;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // IPC
 
 fn handle_client(sh: Arc<Shared>, stream: UnixStream) {
@@ -663,12 +725,22 @@ fn spawn_worker(sh: &Arc<Shared>, f: Found, has_lcd: bool) -> Result<Worker> {
     let handle = {
         let (sh, done) = (sh.clone(), done.clone());
         thread::Builder::new().name(key.clone()).spawn(move || {
-            let res = match f.kind {
+            // A panic is treated like any other error, so the device is reopened instead of
+            // freezing until the daemon restarts.
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match f.kind {
                 Kind::CommanderCore => run_commander_core(&sh, &f, has_lcd),
                 Kind::LcdCap => run_lcd(&sh, &f),
                 Kind::Nexus => run_nexus(&sh, &f),
                 Kind::Mm700 => run_mm700(&sh, &f),
-            };
+            }))
+            .unwrap_or_else(|panic| {
+                let msg = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".into());
+                Err(anyhow!("crashed: {msg}"))
+            });
             match res {
                 Ok(()) => sh.remove_device(&key),
                 Err(e) => sh.device_error(&f, Some(format!("{e:#}"))),
@@ -685,6 +757,7 @@ pub fn run() -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGINT, stop.clone())?;
     signal_hook::flag::register(signal_hook::consts::SIGHUP, stop.clone())?;
 
+    let (media_tx, media_rx) = mpsc::channel();
     let sh = Arc::new(Shared {
         config: RwLock::new(Config::load()),
         rev: AtomicU64::new(0),
@@ -692,6 +765,7 @@ pub fn run() -> Result<()> {
         stop,
         rescan: AtomicBool::new(false),
         nexus_page: AtomicUsize::new(0),
+        media: media_tx,
         epoch: Instant::now(),
     });
     start_ipc(sh.clone())?;
@@ -707,6 +781,11 @@ pub fn run() -> Result<()> {
                 nap(&sh, Duration::from_secs(1));
             }
         })
+    };
+
+    let media = {
+        let sh = sh.clone();
+        thread::Builder::new().name("media".into()).spawn(move || run_media(&sh, media_rx))?
     };
 
     let mut workers: HashMap<String, Worker> = HashMap::new();
@@ -770,6 +849,7 @@ pub fn run() -> Result<()> {
         let _ = w.handle.join();
     }
     let _ = sensors.join();
+    let _ = media.join();
     let _ = std::fs::remove_file(socket_path());
     Ok(())
 }

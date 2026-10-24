@@ -304,6 +304,8 @@ pub enum NexusMode {
     Buttons,
     Sysinfo,
     Clock,
+    /// Now playing from the active media player, with transport controls.
+    Media,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
