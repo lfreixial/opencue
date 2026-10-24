@@ -371,22 +371,17 @@ struct Art {
 
 impl Art {
     fn local_path(&mut self, art_url: &str, media_url: &str) -> Option<String> {
-        let source = match media_url.strip_prefix("file://").map(percent_decode) {
-            _ if !art_url.is_empty() => art_url.to_string(),
-            Some(file) if extension(&file).is_some_and(|e| VIDEO_EXTS.contains(&e.as_str())) => {
-                format!("thumbnail:{file}")
-            }
-            _ => String::new(),
-        };
+        let source = art_source(art_url, media_url);
         if source != self.source {
             self.source = source.clone();
             self.path = Arc::new(Mutex::new(None));
             if let Some(file) = source.strip_prefix("file://") {
-                *self.path.lock().unwrap() = Some(percent_decode(file));
+                *self.path.lock().unwrap() = Some(file.to_string());
             } else if source.starts_with("https://") || source.starts_with("http://") {
                 self.fetch_in_background(source, |url, out| {
                     run(Command::new("curl")
-                        .args(["-sfL", "--max-time", "10", "--max-filesize", "10000000", "-o"])
+                        .args(["-sfL", "--proto", "=http,https", "--proto-redir", "=http,https"])
+                        .args(["--max-time", "10", "--max-filesize", "10000000", "-o"])
                         .arg(out)
                         .arg(url))
                 });
@@ -410,13 +405,36 @@ impl Art {
     }
 }
 
+/// Where a player's cover comes from. Players are any app on the session bus, so only web URLs and
+/// absolute local paths are accepted; anything else (other URL schemes, `file://` URLs that don't
+/// name a local path) gets no art.
+fn art_source(art_url: &str, media_url: &str) -> String {
+    let local = |url: &str| url.strip_prefix("file://").map(percent_decode).filter(|p| p.starts_with('/'));
+    if art_url.starts_with("https://") || art_url.starts_with("http://") {
+        return art_url.to_string();
+    }
+    if let Some(path) = local(art_url) {
+        return format!("file://{path}");
+    }
+    match local(media_url) {
+        Some(video) if art_url.is_empty() && extension(&video).is_some_and(|e| VIDEO_EXTS.contains(&e.as_str())) => {
+            format!("thumbnail:{video}")
+        }
+        _ => String::new(),
+    }
+}
+
 fn thumbnail(video: &str, out: &Path, seek: Option<&str>) -> Result<()> {
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-nostdin", "-v", "error", "-y"]);
     if let Some(seek) = seek {
         cmd.args(["-ss", seek]);
     }
-    cmd.arg("-i").arg(video).args(["-frames:v", "1", "-vf", "scale=160:-2", "-f", "image2", "-c:v", "mjpeg"]).arg(out);
+    // The "file:" protocol makes ffmpeg treat the input as a local file, never a URL or other protocol.
+    cmd.arg("-i")
+        .arg(format!("file:{video}"))
+        .args(["-frames:v", "1", "-vf", "scale=160:-2", "-f", "image2", "-c:v", "mjpeg"])
+        .arg(out);
     run(&mut cmd)?;
     if std::fs::metadata(out).map_or(true, |m| m.len() == 0) {
         bail!("no frame");
@@ -489,6 +507,26 @@ mod tests {
         assert_eq!(strip_media_ext("track.FLAC"), "track");
         assert_eq!(strip_media_ext("Mr. Brightside"), "Mr. Brightside");
         assert_eq!(strip_media_ext(".mp4"), ".mp4");
+    }
+
+    #[test]
+    fn art_sources_are_web_or_local_paths_only() {
+        let web = "https://i.scdn.co/image/abc";
+        assert_eq!(art_source(web, ""), web);
+        assert_eq!(art_source("file:///home/me/My%20Music/cover.jpg", ""), "file:///home/me/My Music/cover.jpg");
+        assert_eq!(art_source("", "file:///home/me/Holiday.mp4"), "thumbnail:/home/me/Holiday.mp4");
+        // A player's art takes precedence over a thumbnail, even when it is rejected.
+        assert_eq!(art_source("ftp://host/x.jpg", "file:///home/me/Holiday.mp4"), "");
+        for (art, media) in [
+            ("", "file://http://evil.example/x.mp4"),
+            ("", "file://relative/x.mp4"),
+            ("", "https://example.com/x.mp4"),
+            ("", "file:///home/me/song.mp3"),
+            ("file://evil.example/x.jpg", ""),
+            ("data:image/png;base64,AAAA", ""),
+        ] {
+            assert_eq!(art_source(art, media), "", "{art:?} {media:?}");
+        }
     }
 
     #[test]
