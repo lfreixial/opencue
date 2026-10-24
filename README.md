@@ -83,7 +83,8 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
 - **Nexus shortcuts do nothing**: the udev rule also grants access to `/dev/uinput`, which is used to
   send key presses. Check the daemon log with `journalctl --user -u opencue`.
 - **Now playing shows nothing**: the player has to support MPRIS. Spotify, browsers, VLC and most music
-  players do; mpv needs the `mpv-mpris` plugin. Cover art from the web is downloaded with `curl`.
+  players do; mpv needs the `mpv-mpris` plugin (`sudo pacman -S mpv-mpris`). Cover art from the web is
+  downloaded with `curl`, and local videos without art get a thumbnail made with `ffmpeg`.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -24,6 +24,9 @@ const PATH: &str = "/org/mpris/MediaPlayer2";
 const ROOT_IFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 const SEEK_US: i64 = 10_000_000;
+
+const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "webm", "avi", "mov", "m4v", "wmv", "flv", "ts", "mpg", "mpeg", "ogv"];
+const AUDIO_EXTS: &[&str] = &["mp3", "flac", "ogg", "opus", "m4a", "wav", "aac", "wma", "alac", "aiff"];
 
 /// Bus names of apps that are mainly music players.
 const MUSIC_APPS: &[&str] = &[
@@ -74,6 +77,8 @@ struct Player {
     artist: String,
     album: String,
     art_url: String,
+    /// The media itself (`xesam:url`), used to make a thumbnail for videos without art.
+    url: String,
     length_us: Option<u64>,
     position_us: u64,
     rate: f64,
@@ -188,7 +193,7 @@ impl Mpris {
             title: p.title,
             artist: p.artist,
             album: p.album,
-            art: self.art.local_path(&p.art_url),
+            art: self.art.local_path(&p.art_url, &p.url),
             playing: p.status == Status::Playing,
             length_us: p.length_us,
             position_us: p.position_us,
@@ -278,9 +283,10 @@ fn read_player(conn: &Connection, bus: &str, identities: &mut HashMap<String, St
         bus: bus.to_string(),
         identity: identities[bus].clone(),
         status,
-        title: text("xesam:title"),
+        title: strip_media_ext(&text("xesam:title")),
         artist: text("xesam:artist"),
         art_url: text("mpris:artUrl"),
+        url: text("xesam:url"),
         length_us: meta.get("mpris:length").and_then(|v| as_i64(v)).filter(|&l| l > 0).map(|l| l as u64),
         position_us: props.get("Position").and_then(|v| as_i64(v)).unwrap_or(0).max(0) as u64,
         rate: props.get("Rate").and_then(|v| as_f64(v)).filter(|r| *r > 0.0).unwrap_or(1.0),
@@ -292,6 +298,20 @@ fn read_player(conn: &Connection, bus: &str, identities: &mut HashMap<String, St
 fn get_all(conn: &Connection, bus: &str, iface: &str) -> Result<HashMap<String, OwnedValue>> {
     let reply = conn.call_method(Some(bus), PATH, Some("org.freedesktop.DBus.Properties"), "GetAll", &(iface,))?;
     Ok(reply.body().deserialize()?)
+}
+
+fn extension(name: &str) -> Option<String> {
+    name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map(|(_, ext)| ext.to_ascii_lowercase())
+}
+
+/// Players such as mpv use the file name as the title: "Holiday.mp4" -> "Holiday".
+fn strip_media_ext(title: &str) -> String {
+    match extension(title) {
+        Some(ext) if VIDEO_EXTS.contains(&ext.as_str()) || AUDIO_EXTS.contains(&ext.as_str()) => {
+            title[..title.len() - ext.len() - 1].to_string()
+        }
+        _ => title.to_string(),
+    }
 }
 
 /// "org.mpris.MediaPlayer2.chromium.instance1234" -> "chromium"
@@ -340,49 +360,90 @@ fn as_f64(v: &Value) -> Option<f64> {
     }
 }
 
-/// Cover art as a local file. `file://` URLs are used directly; web URLs are downloaded in the
-/// background into the runtime directory, and only the current cover is kept there.
+/// Cover art as a local file. `file://` URLs are used directly; web URLs are downloaded and local
+/// videos without art get a frame grabbed with ffmpeg, both in the background into the runtime
+/// directory, where only the current cover is kept.
 #[derive(Default)]
 struct Art {
-    url: String,
+    source: String,
     path: Arc<Mutex<Option<String>>>,
 }
 
 impl Art {
-    fn local_path(&mut self, url: &str) -> Option<String> {
-        if url != self.url {
-            self.url = url.to_string();
+    fn local_path(&mut self, art_url: &str, media_url: &str) -> Option<String> {
+        let source = match media_url.strip_prefix("file://").map(percent_decode) {
+            _ if !art_url.is_empty() => art_url.to_string(),
+            Some(file) if extension(&file).is_some_and(|e| VIDEO_EXTS.contains(&e.as_str())) => {
+                format!("thumbnail:{file}")
+            }
+            _ => String::new(),
+        };
+        if source != self.source {
+            self.source = source.clone();
             self.path = Arc::new(Mutex::new(None));
-            if let Some(file) = url.strip_prefix("file://") {
+            if let Some(file) = source.strip_prefix("file://") {
                 *self.path.lock().unwrap() = Some(percent_decode(file));
-            } else if url.starts_with("https://") || url.starts_with("http://") {
-                let (url, slot) = (url.to_string(), self.path.clone());
-                thread::spawn(move || match download(&url) {
-                    Ok(path) => *slot.lock().unwrap() = Some(path),
-                    Err(e) => log::debug!("cover art {url}: {e:#}"),
+            } else if source.starts_with("https://") || source.starts_with("http://") {
+                self.fetch_in_background(source, |url, out| {
+                    run(Command::new("curl")
+                        .args(["-sfL", "--max-time", "10", "--max-filesize", "10000000", "-o"])
+                        .arg(out)
+                        .arg(url))
+                });
+            } else if source.starts_with("thumbnail:") {
+                self.fetch_in_background(source, |source, out| {
+                    let video = source.strip_prefix("thumbnail:").unwrap();
+                    // A few seconds in skips black intros; short clips fall back to the start.
+                    thumbnail(video, out, Some("5")).or_else(|_| thumbnail(video, out, None))
                 });
             }
         }
         self.path.lock().unwrap().clone()
     }
+
+    fn fetch_in_background(&self, source: String, make: fn(&str, &Path) -> Result<()>) {
+        let slot = self.path.clone();
+        thread::spawn(move || match cached(&source, make) {
+            Ok(path) => *slot.lock().unwrap() = Some(path),
+            Err(e) => log::debug!("cover art {source}: {e:#}"),
+        });
+    }
 }
 
-fn download(url: &str) -> Result<String> {
+fn thumbnail(video: &str, out: &Path, seek: Option<&str>) -> Result<()> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-nostdin", "-v", "error", "-y"]);
+    if let Some(seek) = seek {
+        cmd.args(["-ss", seek]);
+    }
+    cmd.arg("-i").arg(video).args(["-frames:v", "1", "-vf", "scale=160:-2", "-f", "image2", "-c:v", "mjpeg"]).arg(out);
+    run(&mut cmd)?;
+    if std::fs::metadata(out).map_or(true, |m| m.len() == 0) {
+        bail!("no frame");
+    }
+    Ok(())
+}
+
+fn run(cmd: &mut Command) -> Result<()> {
+    let status = cmd.status()?;
+    if !status.success() {
+        bail!("{:?} failed ({status})", cmd.get_program());
+    }
+    Ok(())
+}
+
+/// Make the file for `source` once (into a temp file, then renamed) and keep only it in the cache.
+fn cached(source: &str, make: fn(&str, &Path) -> Result<()>) -> Result<String> {
     let dir: PathBuf = socket_path().with_file_name("opencue-art");
     std::fs::create_dir_all(&dir)?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut h);
+    source.hash(&mut h);
     let path = dir.join(format!("{:016x}", h.finish()));
     if !path.exists() {
         let tmp = path.with_extension("part");
-        let status = Command::new("curl")
-            .args(["-sfL", "--max-time", "10", "--max-filesize", "10000000", "-o"])
-            .arg(&tmp)
-            .arg(url)
-            .status()?;
-        if !status.success() {
+        if let Err(e) = make(source, &tmp) {
             let _ = std::fs::remove_file(&tmp);
-            bail!("curl failed ({status})");
+            return Err(e);
         }
         std::fs::rename(&tmp, &path)?;
         for entry in std::fs::read_dir(&dir)?.flatten() {
@@ -420,6 +481,14 @@ mod tests {
     fn decodes_file_urls() {
         assert_eq!(percent_decode("/home/me/My%20Music/cover.jpg"), "/home/me/My Music/cover.jpg");
         assert_eq!(percent_decode("/a%2"), "/a%2");
+    }
+
+    #[test]
+    fn strips_media_extensions_from_titles() {
+        assert_eq!(strip_media_ext("My Holiday Video.mp4"), "My Holiday Video");
+        assert_eq!(strip_media_ext("track.FLAC"), "track");
+        assert_eq!(strip_media_ext("Mr. Brightside"), "Mr. Brightside");
+        assert_eq!(strip_media_ext(".mp4"), ".mp4");
     }
 
     #[test]
