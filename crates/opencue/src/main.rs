@@ -2,6 +2,7 @@
 
 mod actions;
 mod daemon;
+mod media;
 
 use anyhow::{Context, Result, bail};
 use opencue_core::devices::discover;

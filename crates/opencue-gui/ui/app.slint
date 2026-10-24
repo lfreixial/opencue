@@ -819,7 +819,9 @@ export component AppWindow inherits Window {
             if root.page == 4: VerticalLayout {
                 spacing: 16px;
                 Card {
-                    title: root.nexus-present ? "NEXUS · click a button to edit it" : "NEXUS (not detected; preview only)";
+                    title: !root.nexus-present ? "NEXUS (not detected; preview only)"
+                        : root.nexus-mode == 3 ? "NEXUS · click to control playback, or the track to switch player"
+                        : "NEXUS · click a button to edit it";
                     Rectangle {
                         height: 72px;
                         border-radius: 6px;
@@ -838,7 +840,7 @@ export component AppWindow inherits Window {
                         spacing: 12px;
                         Text { text: "Mode"; color: Theme.text; vertical-alignment: center; }
                         Segmented {
-                            items: ["Buttons", "System info", "Clock"];
+                            items: ["Buttons", "System info", "Clock", "Now playing"];
                             current <=> root.nexus-mode;
                             selected => { root.nexus-changed(); }
                         }

@@ -3376,6 +3376,7 @@ dependencies = [
  "opencue-core",
  "serde_json",
  "signal-hook",
+ "zbus",
 ]
 
 [[package]]

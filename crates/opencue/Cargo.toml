@@ -17,3 +17,4 @@ log = "0.4.34"
 opencue-core = { version = "0.1.0", path = "../opencue-core" }
 serde_json = "1.0.154"
 signal-hook = "0.4.5"
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }

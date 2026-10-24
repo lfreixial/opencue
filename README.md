@@ -14,7 +14,9 @@ the Elite LCD pump screen (including GIFs) and iCUE NEXUS touch shortcuts.
 - **Pump LCD**: images and animated GIFs, or live liquid / CPU / GPU / pump-speed / dashboard / clock / text
   screens, with brightness and rotation.
 - **iCUE NEXUS**: pages of touch buttons that press key combos or media keys, run commands, open URLs, type
-  text, switch profiles or change the LCD screen. Also system-info and clock modes.
+  text, switch profiles or change the LCD screen. Also system-info, clock and **now playing** modes: the
+  current track from Spotify or any other MPRIS player (browsers, VLC, mpv, ...) with cover art, a progress
+  bar and touch controls. Music players are preferred over videos; tap the track info to switch players.
 - **Profiles** you can switch from the app, the CLI or a Nexus button.
 - **Safety first**: every fan and the pump go to 100% above a critical liquid or CPU temperature, and any
   fan whose sensor stops reporting does the same. The pump never drops below 50%. When OpenCUE stops, the
@@ -80,6 +82,8 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
   device (or reboot).
 - **Nexus shortcuts do nothing**: the udev rule also grants access to `/dev/uinput`, which is used to
   send key presses. Check the daemon log with `journalctl --user -u opencue`.
+- **Now playing shows nothing**: the player has to support MPRIS. Spotify, browsers, VLC and most music
+  players do; mpv needs the `mpv-mpris` plugin. Cover art from the web is downloaded with `curl`.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 
