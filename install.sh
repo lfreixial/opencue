@@ -22,7 +22,13 @@ cargo build --release
 install -Dm755 target/release/opencue "$HOME/.local/bin/opencue"
 install -Dm755 target/release/opencue-gui "$HOME/.local/bin/opencue-gui"
 install -Dm644 data/opencue.service "$HOME/.config/systemd/user/opencue.service"
-install -Dm644 data/opencue.desktop "$HOME/.local/share/applications/opencue.desktop"
+# App launchers don't read the shell's PATH, which often lacks ~/.local/bin, so point
+# the desktop entry at the installed binary directly.
+install -d "$HOME/.local/share/applications"
+sed "s|^Exec=opencue-gui$|Exec=$HOME/.local/bin/opencue-gui|" data/opencue.desktop \
+    > "$HOME/.local/share/applications/opencue.desktop"
+chmod 644 "$HOME/.local/share/applications/opencue.desktop"
+command -v update-desktop-database >/dev/null && update-desktop-database -q "$HOME/.local/share/applications" || true
 install -Dm644 data/opencue.svg "$HOME/.local/share/icons/hicolor/scalable/apps/opencue.svg"
 systemctl --user daemon-reload
 systemctl --user enable opencue.service
