@@ -22,6 +22,7 @@ use opencue_core::devices::lcd_cap::LcdCap;
 use opencue_core::devices::mm700::{self, Mm700};
 use opencue_core::devices::nexus::{Nexus, Touch};
 use opencue_core::devices::{Found, Kind, discover};
+use opencue_core::gamestats::{self, LogTracker};
 use opencue_core::ipc::{Request, Response, socket_path};
 use opencue_core::lighting;
 use opencue_core::render;
@@ -451,7 +452,8 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
             let img = render::nexus::render(nx, page, pressed, &t, cfg.settings.fahrenheit);
             nexus.write_rgba(img.as_raw())?;
             // The progress bar moves, and track changes should show up quickly.
-            let every = if nx.mode == NexusMode::Media { Duration::from_millis(500) } else { Duration::from_secs(1) };
+            let live = matches!(nx.mode, NexusMode::Media | NexusMode::Gaming);
+            let every = if live { Duration::from_millis(500) } else { Duration::from_secs(1) };
             next_render = Instant::now() + every;
         }
 
@@ -643,6 +645,36 @@ fn run_media(sh: &Shared, commands: mpsc::Receiver<String>) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Game stats (MangoHud logs)
+
+/// Follows the running game's MangoHud log while the Nexus shows game stats, and deletes logs of
+/// games that have closed.
+fn run_game_stats(sh: &Shared) {
+    let mut tracker = LogTracker::new();
+    let mut tracking = false;
+    let mut last_clean: Option<Instant> = None;
+    while !sh.stopping() {
+        if last_clean.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
+            gamestats::clean_old_logs();
+            last_clean = Some(Instant::now());
+        }
+        if sh.config().nexus.mode == NexusMode::Gaming {
+            let stats = tracker.poll();
+            sh.telemetry(|t| t.game = stats);
+            tracking = true;
+            nap(sh, Duration::from_millis(500));
+        } else {
+            if tracking {
+                sh.telemetry(|t| t.game = None);
+                tracker = LogTracker::new();
+                tracking = false;
+            }
+            nap(sh, Duration::from_secs(1));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // IPC
 
 fn handle_client(sh: Arc<Shared>, stream: UnixStream) {
@@ -788,6 +820,11 @@ pub fn run() -> Result<()> {
         thread::Builder::new().name("media".into()).spawn(move || run_media(&sh, media_rx))?
     };
 
+    let game_stats = {
+        let sh = sh.clone();
+        thread::Builder::new().name("game-stats".into()).spawn(move || run_game_stats(&sh))?
+    };
+
     let mut workers: HashMap<String, Worker> = HashMap::new();
     let mut retry: HashMap<String, Retry> = HashMap::new();
     while !sh.stopping() {
@@ -850,6 +887,7 @@ pub fn run() -> Result<()> {
     }
     let _ = sensors.join();
     let _ = media.join();
+    let _ = game_stats.join();
     let _ = std::fs::remove_file(socket_path());
     Ok(())
 }
