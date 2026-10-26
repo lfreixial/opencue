@@ -93,6 +93,8 @@ pub fn setup_mangohud() -> io::Result<PathBuf> {
         out.push('\n');
     }
     out.push_str(&block(&log_dir()));
+    // MangoHud does not create its output folder; without it, it silently logs nothing.
+    fs::create_dir_all(log_dir())?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -279,8 +281,12 @@ fn newest_log(dir: &Path) -> Option<(PathBuf, Duration)> {
         .min_by_key(|(_, age)| *age)
 }
 
-/// Delete logs of games that closed a while ago; they grow by ~15 KB per second of play.
-pub fn clean_old_logs() {
+/// Make sure the log folder exists (MangoHud won't create it, e.g. after the cache is cleared) and
+/// delete logs of games that closed a while ago; they grow by ~15 KB per second of play.
+pub fn maintain_log_dir() {
+    if mangohud_status() == MangoHudStatus::Ready {
+        let _ = fs::create_dir_all(log_dir());
+    }
     let Ok(entries) = fs::read_dir(log_dir()) else { return };
     for e in entries.flatten() {
         let old = e

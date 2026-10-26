@@ -647,15 +647,15 @@ fn run_media(sh: &Shared, commands: mpsc::Receiver<String>) {
 // ---------------------------------------------------------------------------------------------
 // Game stats (MangoHud logs)
 
-/// Follows the running game's MangoHud log while the Nexus shows game stats, and deletes logs of
-/// games that have closed.
+/// Follows the running game's MangoHud log while the Nexus shows game stats, keeps the log folder
+/// in place and deletes logs of games that have closed.
 fn run_game_stats(sh: &Shared) {
     let mut tracker = LogTracker::new();
     let mut tracking = false;
     let mut last_clean: Option<Instant> = None;
     while !sh.stopping() {
         if last_clean.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
-            gamestats::clean_old_logs();
+            gamestats::maintain_log_dir();
             last_clean = Some(Instant::now());
         }
         if sh.config().nexus.mode == NexusMode::Gaming {
