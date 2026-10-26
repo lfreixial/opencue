@@ -2,6 +2,7 @@
 
 mod actions;
 mod daemon;
+mod discord;
 mod media;
 
 use anyhow::{Context, Result, bail};
@@ -20,6 +21,7 @@ USAGE:
     opencue devices           list Corsair USB devices and whether they are accessible
     opencue profile [NAME]    list profiles, or switch to NAME
     opencue rescan            look for newly connected devices now
+    opencue discord ACTION    mute, deafen, camera, screenshare or leave (e.g. for a keyboard shortcut)
 ";
 
 fn client() -> Result<Client> {
@@ -115,6 +117,16 @@ fn main() -> Result<()> {
         Some("rescan") => {
             client()?.request(&Request::Rescan)?;
             Ok(())
+        }
+        Some("discord") => {
+            let action = args.next().unwrap_or_default();
+            if !opencue_core::config::DISCORD_ACTIONS.iter().any(|(a, _)| *a == action) {
+                bail!("usage: opencue discord mute|deafen|camera|screenshare|leave");
+            }
+            match client()?.request(&Request::RunAction(opencue_core::config::Action::Discord(action)))? {
+                Response::Error(e) => bail!(e),
+                _ => Ok(()),
+            }
         }
         Some("gui") => {
             let exe = std::env::current_exe()?.with_file_name("opencue-gui");

@@ -28,6 +28,10 @@ pub enum Request {
     Rescan,
     /// Run a Nexus action now (the GUI's "Test action" button).
     RunAction(Action),
+    /// Ask Discord to authorise OpenCUE (shows a prompt in Discord).
+    DiscordConnect,
+    /// Forget the Discord login.
+    DiscordDisconnect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

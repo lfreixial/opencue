@@ -6,9 +6,9 @@ use image::RgbaImage;
 use image::imageops::FilterType;
 
 use super::{Fonts, blend, fill_rect, fmt_temp, fonts, local_time, solid};
-use crate::config::{GameMetric, NexusConfig, NexusMode, parse_color};
+use crate::config::{Action, DISCORD_ACTIONS, GameMetric, NexusConfig, NexusMode, parse_color};
 use crate::devices::nexus::{HEIGHT, WIDTH};
-use crate::telemetry::{NowPlaying, Telemetry};
+use crate::telemetry::{DiscordState, NowPlaying, Telemetry};
 
 const GAP: i32 = 4;
 
@@ -78,6 +78,12 @@ pub fn render(cfg: &NexusConfig, page: usize, pressed: Option<usize>, t: &Teleme
             for (i, b) in p.buttons.iter().enumerate() {
                 let (x0, x1) = button_span(i, n);
                 let mut bg = parse_color(&b.color);
+                // Discord mute/deafen buttons show the current state.
+                if let Action::Discord(cmd) = &b.action
+                    && discord_active(&t.discord, cmd)
+                {
+                    bg = MUTED_RED;
+                }
                 if pressed == Some(i) {
                     bg = bg.map(|v| v.saturating_add(60));
                 }
@@ -119,6 +125,7 @@ pub fn render(cfg: &NexusConfig, page: usize, pressed: Option<usize>, t: &Teleme
         }
         NexusMode::Media => media(&mut img, f, t.now_playing.as_ref(), pressed),
         NexusMode::Gaming => gaming(&mut img, f, &cfg.game_metrics, t, fahrenheit),
+        NexusMode::Call => call(&mut img, f, &t.discord, pressed),
     }
     img
 }
@@ -278,6 +285,64 @@ fn game_value(m: GameMetric, t: &Telemetry, fahrenheit: bool) -> (String, [u8; 3
     }
 }
 
+const MUTED_RED: [u8; 3] = [170, 30, 45];
+const CALL_X0: i32 = 196;
+
+fn discord_active(d: &DiscordState, cmd: &str) -> bool {
+    d.connected && ((cmd == "mute" && d.mute) || (cmd == "deafen" && d.deaf))
+}
+
+/// What a touch at `x` does in call mode: an index into [`DISCORD_ACTIONS`].
+pub fn call_control_at(x: u16) -> Option<usize> {
+    let x = x as i32;
+    if x < CALL_X0 {
+        return None;
+    }
+    let n = DISCORD_ACTIONS.len() as i32;
+    let w = (WIDTH as i32 - CALL_X0) / n;
+    Some((((x - CALL_X0) / w).min(n - 1)) as usize)
+}
+
+fn call(img: &mut RgbaImage, f: &Fonts, d: &DiscordState, pressed: Option<usize>) {
+    let info_w = (CALL_X0 - 2 * GAP) as f32;
+    let (title, sub) = match (d.connected, d.in_call) {
+        (false, _) => ("Discord", if d.status.is_empty() { "Not connected" } else { d.status.as_str() }),
+        (true, false) => ("Not in a call", "Mute and deafen still work"),
+        (true, true) => (if d.call_name.is_empty() { "In a call" } else { d.call_name.as_str() }, "Discord"),
+    };
+    f.draw(img, &ellipsize(f, title, 15.0, info_w), 15.0, GAP as f32 + 4.0, 21.0, if d.in_call { TEXT } else { DIM });
+    f.draw(img, &ellipsize(f, sub, 11.0, info_w), 11.0, GAP as f32 + 4.0, 37.0, DIM);
+
+    let n = DISCORD_ACTIONS.len() as i32;
+    let w = (WIDTH as i32 - CALL_X0) / n;
+    for (i, (cmd, _)) in DISCORD_ACTIONS.iter().enumerate() {
+        let x0 = CALL_X0 + i as i32 * w;
+        let usable = d.connected && (d.in_call || matches!(*cmd, "mute" | "deafen"));
+        let active = discord_active(d, cmd);
+        let label = match (*cmd, active) {
+            ("mute", true) => "Muted",
+            ("mute", false) => "Mic",
+            ("deafen", true) => "Deafened",
+            ("deafen", false) => "Sound",
+            ("camera", _) => "Camera",
+            ("screenshare", _) => "Share",
+            _ => "Leave",
+        };
+        let mut bg = match (active, *cmd) {
+            (true, _) => MUTED_RED,
+            (false, "leave") if usable => [90, 25, 35],
+            _ => BUTTON,
+        };
+        if pressed == Some(i) {
+            bg = bg.map(|v| v.saturating_add(60));
+        }
+        rounded_rect(img, x0, 4, x0 + w - GAP, HEIGHT as i32 - 4, 8.0, bg);
+        let size = f.fit_size(label, 15.0, (w - GAP - 8) as f32);
+        let color = if usable { TEXT } else { [80, 80, 95] };
+        f.draw_centered(img, label, size, (x0 + (w - GAP) / 2) as f32, HEIGHT as f32 / 2.0, color);
+    }
+}
+
 /// "3:07" or "1:02:45".
 fn fmt_duration(us: u64) -> String {
     let s = us / 1_000_000;
@@ -413,6 +478,26 @@ mod tests {
         assert_eq!(game_value(GameMetric::CpuTemp, &t, false), ("--".into(), DIM));
         let empty = NexusConfig { game_metrics: vec![], ..cfg };
         render(&empty, 0, None, &t, false);
+    }
+
+    #[test]
+    fn call_controls() {
+        assert_eq!(call_control_at(0), None);
+        assert_eq!(call_control_at(CALL_X0 as u16), Some(0));
+        assert_eq!(call_control_at(639), Some(DISCORD_ACTIONS.len() - 1));
+        let cfg = NexusConfig { mode: NexusMode::Call, ..Default::default() };
+        let mut t = Telemetry::default();
+        render(&cfg, 0, None, &t, false);
+        t.discord = DiscordState {
+            connected: true,
+            in_call: true,
+            call_name: "General".into(),
+            mute: true,
+            ..Default::default()
+        };
+        render(&cfg, 0, Some(0), &t, false);
+        assert!(discord_active(&t.discord, "mute"));
+        assert!(!discord_active(&t.discord, "deafen"));
     }
 
     #[test]

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use image::RgbaImage;
 use opencue_core::config::{
-    Action, ChannelCooling, Config, Effect, FanMode, GameMetric, LcdMode, Lighting, NexusButton, NexusMode, NexusPage,
-    Preset, Sensor, format_color, media_dir, parse_color,
+    Action, ChannelCooling, Config, DISCORD_ACTIONS, Effect, FanMode, GameMetric, LcdMode, Lighting, NexusButton,
+    NexusMode, NexusPage, Preset, Sensor, format_color, media_dir, parse_color,
 };
 use opencue_core::cooling::curve;
 use opencue_core::gamestats::{self, MangoHudStatus};
@@ -26,7 +26,7 @@ mod screenshot;
 slint::include_modules!();
 
 const CHANNELS: [&str; 7] = ["pump", "fan1", "fan2", "fan3", "fan4", "fan5", "fan6"];
-const ACTIONS: [&str; 9] = [
+const ACTIONS: [&str; 10] = [
     "Do nothing",
     "Key combination",
     "Media key",
@@ -36,6 +36,7 @@ const ACTIONS: [&str; 9] = [
     "Switch profile",
     "Change Nexus page",
     "Cycle LCD screen",
+    "Discord call",
 ];
 const MEDIA: [(&str, &str); 10] = [
     ("play_pause", "Play / Pause"),
@@ -328,6 +329,15 @@ fn sync_dashboard(ui: &AppWindow) {
         }));
         ui.set_lcd_present(t.devices.iter().any(|d| d.kind == opencue_core::devices::Kind::LcdCap));
         ui.set_nexus_present(t.devices.iter().any(|d| d.kind == opencue_core::devices::Kind::Nexus));
+        let d = &t.discord;
+        ui.set_discord_connected(d.connected);
+        ui.set_discord_status(ss(match (d.connected, d.in_call) {
+            (true, true) => format!("Connected · in {}", d.call_name),
+            (true, false) => "Connected · not in a call".to_string(),
+            (false, _) if !app.connected => "OpenCUE service is not running".to_string(),
+            (false, _) => d.status.clone(),
+        }));
+        ui.set_discord_has_app(opencue_core::discord::load_credentials().is_some());
 
         // Lighting zones follow what the daemon discovered.
         let mut zones = vec![Zone { id: ss("*"), name: ss("All devices") }];
@@ -466,6 +476,7 @@ fn action_index(a: &Action) -> i32 {
         Action::Profile(_) => 6,
         Action::Page(_) => 7,
         Action::CycleLcd => 8,
+        Action::Discord(_) => 9,
     }
 }
 
@@ -477,8 +488,18 @@ fn action_value(a: &Action) -> String {
         | Action::Url(v)
         | Action::Text(v)
         | Action::Profile(v)
-        | Action::Page(v) => v.clone(),
+        | Action::Page(v)
+        | Action::Discord(v) => v.clone(),
         Action::None | Action::CycleLcd => String::new(),
+    }
+}
+
+/// Actions whose value is picked from a list: the field's label and the (value, label) choices.
+fn action_choices(i: i32) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
+    match i {
+        2 => Some(("Media key", &MEDIA)),
+        9 => Some(("Control", &DISCORD_ACTIONS)),
+        _ => None,
     }
 }
 
@@ -524,6 +545,7 @@ fn sync_nexus(ui: &AppWindow) {
             NexusMode::Clock => 2,
             NexusMode::Media => 3,
             NexusMode::Gaming => 4,
+            NexusMode::Call => 5,
         });
         sync_game_stats(ui, &nx.game_metrics);
         ui.set_nexus_brightness(nx.brightness as f32);
@@ -547,10 +569,14 @@ fn sync_nexus(ui: &AppWindow) {
         ui.set_btn_action(ai);
         ui.set_btn_value(ss(action_value(&b.action)));
         ui.set_btn_value_hint(ss(action_hint(ai)));
-        ui.set_btn_value_is_media(ai == 2);
+        let choices = action_choices(ai);
+        ui.set_btn_value_is_choice(choices.is_some());
         ui.set_btn_value_is_keys(ai == 1);
-        ui.set_media_names(strings(MEDIA.iter().map(|m| m.1)));
-        ui.set_btn_media_index(MEDIA.iter().position(|m| m.0 == action_value(&b.action)).unwrap_or(0) as i32);
+        if let Some((label, list)) = choices {
+            ui.set_btn_choice_label(ss(label));
+            ui.set_choice_names(strings(list.iter().map(|m| m.1)));
+            ui.set_btn_choice_index(list.iter().position(|m| m.0 == action_value(&b.action)).unwrap_or(0) as i32);
+        }
     });
     refresh_nexus_preview(ui);
 }
@@ -1085,7 +1111,14 @@ fn main() -> anyhow::Result<()> {
     let w = ui.as_weak();
     ui.on_nexus_changed(move || {
         let ui = w.unwrap();
-        let modes = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock, NexusMode::Media, NexusMode::Gaming];
+        let modes = [
+            NexusMode::Buttons,
+            NexusMode::Sysinfo,
+            NexusMode::Clock,
+            NexusMode::Media,
+            NexusMode::Gaming,
+            NexusMode::Call,
+        ];
         let mode = modes[ui.get_nexus_mode().clamp(0, modes.len() as i32 - 1) as usize];
         let brightness = ui.get_nexus_brightness().round().clamp(0.0, 100.0) as u8;
         edit(
@@ -1260,10 +1293,9 @@ fn main() -> anyhow::Result<()> {
         let (label, color, text_color) =
             (ui.get_btn_label().to_string(), from_color(ui.get_btn_color()), from_color(ui.get_btn_text_color()));
         let ai = ui.get_btn_action();
-        let value = if ai == 2 {
-            MEDIA[(ui.get_btn_media_index().max(0) as usize).min(MEDIA.len() - 1)].0.to_string()
-        } else {
-            ui.get_btn_value().to_string()
+        let value = match action_choices(ai) {
+            Some((_, list)) => list[(ui.get_btn_choice_index().max(0) as usize).min(list.len() - 1)].0.to_string(),
+            None => ui.get_btn_value().to_string(),
         };
         edit_button(&ui, |b| {
             b.label = label;
@@ -1277,11 +1309,37 @@ fn main() -> anyhow::Result<()> {
         let ui = w.unwrap();
         let default = match ai {
             2 => "play_pause".to_string(),
+            9 => "mute".to_string(),
             7 => "next".to_string(),
             6 => with_app(|a| a.cfg.active_profile.clone()),
             _ => String::new(),
         };
         edit_button(&ui, |b| b.action = make_action(ai, default));
+    });
+    ui.on_discord_save(move |id, secret| {
+        let creds = opencue_core::discord::Credentials {
+            client_id: id.trim().to_string(),
+            client_secret: secret.trim().to_string(),
+        };
+        if creds.client_id.is_empty() || creds.client_secret.is_empty() {
+            return;
+        }
+        match opencue_core::discord::save_credentials(&creds) {
+            Ok(()) => with_app(|app| {
+                let _ = app.tx.send(Request::DiscordConnect);
+            }),
+            Err(e) => log::error!("cannot save Discord credentials: {e}"),
+        }
+    });
+    ui.on_discord_connect(|| {
+        with_app(|app| {
+            let _ = app.tx.send(Request::DiscordConnect);
+        })
+    });
+    ui.on_discord_disconnect(|| {
+        with_app(|app| {
+            let _ = app.tx.send(Request::DiscordDisconnect);
+        })
     });
     let w = ui.as_weak();
     ui.on_nexus_clicked(move |frac| {
@@ -1293,6 +1351,14 @@ fn main() -> anyhow::Result<()> {
             with_app(|app| {
                 let _ = app.tx.send(Request::RunAction(Action::Media(cmd.into())));
             });
+            return;
+        }
+        if ui.get_nexus_mode() == 5 {
+            if let Some(i) = render::nexus::call_control_at(x) {
+                with_app(|app| {
+                    let _ = app.tx.send(Request::RunAction(Action::Discord(DISCORD_ACTIONS[i].0.into())));
+                });
+            }
             return;
         }
         if ui.get_nexus_mode() != 0 {
@@ -1435,6 +1501,7 @@ fn make_action(index: i32, value: String) -> Action {
         6 => Action::Profile(value),
         7 => Action::Page(value),
         8 => Action::CycleLcd,
+        9 => Action::Discord(value),
         _ => Action::None,
     }
 }

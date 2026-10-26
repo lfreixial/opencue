@@ -52,6 +52,23 @@ pub struct Telemetry {
     /// FPS and lows of the running game (only tracked while the Nexus shows game stats).
     #[serde(default)]
     pub game: Option<crate::gamestats::GameStats>,
+    #[serde(default)]
+    pub discord: DiscordState,
+}
+
+/// Discord connection and call state.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordState {
+    /// Authenticated with Discord's local RPC and receiving updates.
+    pub connected: bool,
+    /// What to tell the user when not connected ("Discord isn't running", ...).
+    pub status: String,
+    pub in_call: bool,
+    /// Channel name, or "Call with Alex" for direct calls.
+    pub call_name: String,
+    pub mute: bool,
+    pub deaf: bool,
 }
 
 /// A snapshot of an MPRIS media player.
