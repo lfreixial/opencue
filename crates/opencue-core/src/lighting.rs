@@ -52,7 +52,8 @@ fn hash(a: u32, b: u32) -> f32 {
 
 /// Render one frame for `n` LEDs.
 /// * `t` - seconds since start
-/// * `phase` - per-zone offset (0..1) so fans in a row don't move in lockstep
+/// * `phase` - per-zone offset (0..1) so waves ripple from fan to fan. Effects that colour a whole
+///   zone the same ignore it, so every device shows the same colour.
 /// * `temp` - current reading of the effect's sensor, for the Temperature effect
 pub fn render(cfg: &Lighting, t: f64, n: usize, phase: f32, temp: Option<f32>) -> Vec<[u8; 3]> {
     let colors: Vec<[u8; 3]> =
@@ -72,8 +73,8 @@ pub fn render(cfg: &Lighting, t: f64, n: usize, phase: f32, temp: Option<f32>) -
             let k = 0.5 - 0.5 * (cycle.fract() * std::f32::consts::TAU).cos();
             vec![scale(colors[idx], k); n]
         }
-        Effect::ColorShift => vec![gradient(&colors, tt * 0.1 + phase, true); n],
-        Effect::Rainbow => vec![hsv(tt * 0.1 + phase, 1.0, 1.0); n],
+        Effect::ColorShift => vec![gradient(&colors, tt * 0.1, true); n],
+        Effect::Rainbow => vec![hsv(tt * 0.1, 1.0, 1.0); n],
         Effect::RainbowWave => (0..n).map(|i| hsv(pos(i) + tt * 0.25 + phase, 1.0, 1.0)).collect(),
         Effect::ColorWave => (0..n).map(|i| gradient(&colors, pos(i) - tt * 0.25 + phase, true)).collect(),
         Effect::Spinner => {
@@ -133,6 +134,14 @@ mod tests {
         let cfg =
             Lighting { effect: Effect::Static, colors: vec!["#ff8000".into()], brightness: 50, ..Default::default() };
         assert_eq!(render(&cfg, 0.0, 2, 0.0, None), vec![[128, 64, 0], [128, 64, 0]]);
+    }
+
+    #[test]
+    fn whole_zone_effects_match_across_devices() {
+        for effect in [Effect::Rainbow, Effect::ColorShift] {
+            let cfg = Lighting { effect, speed: 1, ..Default::default() };
+            assert_eq!(render(&cfg, 12.0, 8, 0.0, None), render(&cfg, 12.0, 8, 3.0 / 7.0, None), "{effect:?}");
+        }
     }
 
     #[test]
