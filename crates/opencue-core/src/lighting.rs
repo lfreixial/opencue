@@ -1,7 +1,46 @@
 //! RGB effects. Every effect is a pure function of time, so the daemon and the GUI preview
 //! render exactly the same thing.
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::{Effect, Lighting, parse_color};
+
+/// Where an effect is. It moves at the effect's speed, and when the speed changes it carries on
+/// from where it was, instead of jumping to where the new speed would have put it by now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct EffectClock {
+    /// Unix time (seconds) of the last speed change.
+    pub at: f64,
+    pub pos: f64,
+    pub rate: f64,
+}
+
+impl EffectClock {
+    pub fn pos_at(&self, now: f64) -> f64 {
+        self.pos + (now - self.at) * self.rate
+    }
+
+    /// Move at `cfg`'s speed from `now` on, and return the position now.
+    pub fn follow(&mut self, cfg: &Lighting, now: f64) -> f64 {
+        let rate = rate(cfg);
+        if rate != self.rate {
+            self.pos = self.pos_at(now);
+            self.at = now;
+            self.rate = rate;
+        }
+        self.pos_at(now)
+    }
+}
+
+/// 1.0 at the default speed; negative when reversed.
+pub fn rate(cfg: &Lighting) -> f64 {
+    cfg.speed.clamp(1, 100) as f64 / 50.0 * if cfg.reverse { -1.0 } else { 1.0 }
+}
+
+/// The clock every [`EffectClock`] runs on, shared by the daemon and the app's preview.
+pub fn unix_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+}
 
 pub fn hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
     let h = h.rem_euclid(1.0) * 6.0;
@@ -51,16 +90,15 @@ fn hash(a: u32, b: u32) -> f32 {
 }
 
 /// Render one frame for `n` LEDs.
-/// * `t` - seconds since start
+/// * `pos` - where the effect is (see [`EffectClock`]); speed and direction are already in it
 /// * `phase` - per-zone offset (0..1) so waves ripple from fan to fan. Effects that colour a whole
 ///   zone the same ignore it, so every device shows the same colour.
 /// * `temp` - current reading of the effect's sensor, for the Temperature effect
-pub fn render(cfg: &Lighting, t: f64, n: usize, phase: f32, temp: Option<f32>) -> Vec<[u8; 3]> {
+pub fn render(cfg: &Lighting, pos: f64, n: usize, phase: f32, temp: Option<f32>) -> Vec<[u8; 3]> {
     let colors: Vec<[u8; 3]> =
         if cfg.colors.is_empty() { vec![[255, 255, 255]] } else { cfg.colors.iter().map(|c| parse_color(c)).collect() };
     let c0 = colors[0];
-    let speed = cfg.speed.clamp(1, 100) as f32 / 50.0; // 1.0 at the default speed
-    let tt = (t as f32) * speed * if cfg.reverse { -1.0 } else { 1.0 };
+    let tt = pos as f32;
     let pos = |i: usize| if n == 0 { 0.0 } else { i as f32 / n as f32 };
 
     let mut out: Vec<[u8; 3]> = match cfg.effect {
@@ -142,6 +180,19 @@ mod tests {
             let cfg = Lighting { effect, speed: 1, ..Default::default() };
             assert_eq!(render(&cfg, 12.0, 8, 0.0, None), render(&cfg, 12.0, 8, 3.0 / 7.0, None), "{effect:?}");
         }
+    }
+
+    #[test]
+    fn changing_speed_carries_on_from_where_it_was() {
+        let mut clock = EffectClock::default();
+        let slow = Lighting { speed: 10, ..Default::default() };
+        let fast = Lighting { speed: 90, ..Default::default() };
+        clock.follow(&slow, 1000.0);
+        let before = clock.follow(&slow, 1010.0);
+        assert_eq!(clock.follow(&fast, 1010.0), before);
+        assert!((clock.follow(&fast, 1011.0) - before - 1.8).abs() < 1e-9);
+        let back = Lighting { reverse: true, ..fast };
+        assert_eq!(clock.follow(&back, 1011.0), clock.pos_at(1011.0));
     }
 
     #[test]
