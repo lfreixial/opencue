@@ -3,6 +3,7 @@
 pub mod config;
 pub mod cooling;
 pub mod devices;
+pub mod discord;
 pub mod gamestats;
 pub mod hidraw;
 pub mod ipc;

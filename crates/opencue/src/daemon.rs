@@ -29,7 +29,7 @@ use opencue_core::render;
 use opencue_core::sensors::{SensorReader, SystemSensors};
 use opencue_core::telemetry::{ChannelState, DeviceState, LightingZone, Telemetry};
 
-use crate::{actions, media};
+use crate::{actions, discord, media};
 
 /// A gap this long between loop iterations means the machine was suspended.
 const RESUME_GAP: Duration = Duration::from_secs(5);
@@ -44,6 +44,7 @@ pub struct Shared {
     nexus_page: AtomicUsize,
     /// Media commands for the MPRIS thread.
     media: mpsc::Sender<String>,
+    discord: mpsc::Sender<discord::Request>,
     epoch: Instant,
 }
 
@@ -452,7 +453,7 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
             let img = render::nexus::render(nx, page, pressed, &t, cfg.settings.fahrenheit);
             nexus.write_rgba(img.as_raw())?;
             // The progress bar moves, and track changes should show up quickly.
-            let live = matches!(nx.mode, NexusMode::Media | NexusMode::Gaming);
+            let live = matches!(nx.mode, NexusMode::Media | NexusMode::Gaming | NexusMode::Call);
             let every = if live { Duration::from_millis(500) } else { Duration::from_secs(1) };
             next_render = Instant::now() + every;
         }
@@ -464,7 +465,14 @@ fn nexus_loop(sh: &Arc<Shared>, nexus: &Nexus, touches: &mpsc::Receiver<Touch>) 
                 log::debug!("Nexus touch: pressed={} x={}", ev.pressed, ev.x);
                 if ev.pressed && !touching {
                     touching = true;
-                    if nx.mode == NexusMode::Media {
+                    if nx.mode == NexusMode::Call {
+                        if let Some(i) = render::nexus::call_control_at(ev.x) {
+                            let cmd = opencue_core::config::DISCORD_ACTIONS[i].0;
+                            log::info!("Nexus: Discord '{cmd}' (touch x={})", ev.x);
+                            pressed = Some(i);
+                            let _ = sh.discord.send(discord::Request::Action(cmd.into()));
+                        }
+                    } else if nx.mode == NexusMode::Media {
                         let control = render::nexus::media_control_at(ev.x);
                         let cmd = control.map_or("switch_player", |i| render::nexus::MEDIA_CONTROLS[i]);
                         log::info!("Nexus: media '{cmd}' (touch x={})", ev.x);
@@ -508,6 +516,13 @@ pub fn perform(sh: &Shared, action: &Action) -> Result<()> {
         }
         Action::Media(cmd) => {
             sh.media.send(cmd.clone()).map_err(|_| anyhow!("media thread stopped"))?;
+            Ok(())
+        }
+        Action::Discord(cmd) => {
+            if !sh.telemetry(|t| t.discord.connected) {
+                bail!("not connected to Discord");
+            }
+            sh.discord.send(discord::Request::Action(cmd.clone())).map_err(|_| anyhow!("Discord thread stopped"))?;
             Ok(())
         }
         Action::Command(cmd) => actions::run_command(cmd),
@@ -702,6 +717,14 @@ fn handle_client(sh: Arc<Shared>, stream: UnixStream) {
                 Ok(()) => Response::Ok,
                 Err(e) => Response::Error(format!("{e:#}")),
             },
+            Ok(Request::DiscordConnect) => {
+                let _ = sh.discord.send(discord::Request::Connect);
+                Response::Ok
+            }
+            Ok(Request::DiscordDisconnect) => {
+                let _ = sh.discord.send(discord::Request::Disconnect);
+                Response::Ok
+            }
             Ok(Request::Rescan) => {
                 sh.rescan.store(true, Ordering::Relaxed);
                 Response::Ok
@@ -790,6 +813,7 @@ pub fn run() -> Result<()> {
     signal_hook::flag::register(signal_hook::consts::SIGHUP, stop.clone())?;
 
     let (media_tx, media_rx) = mpsc::channel();
+    let (discord_tx, discord_rx) = mpsc::channel();
     let sh = Arc::new(Shared {
         config: RwLock::new(Config::load()),
         rev: AtomicU64::new(0),
@@ -798,6 +822,7 @@ pub fn run() -> Result<()> {
         rescan: AtomicBool::new(false),
         nexus_page: AtomicUsize::new(0),
         media: media_tx,
+        discord: discord_tx,
         epoch: Instant::now(),
     });
     start_ipc(sh.clone())?;
@@ -823,6 +848,13 @@ pub fn run() -> Result<()> {
     let game_stats = {
         let sh = sh.clone();
         thread::Builder::new().name("game-stats".into()).spawn(move || run_game_stats(&sh))?
+    };
+
+    let discord = {
+        let sh = sh.clone();
+        thread::Builder::new().name("discord".into()).spawn(move || {
+            discord::run(|| sh.stopping(), |state| sh.telemetry(|t| t.discord = state.clone()), discord_rx)
+        })?
     };
 
     let mut workers: HashMap<String, Worker> = HashMap::new();
@@ -888,6 +920,7 @@ pub fn run() -> Result<()> {
     let _ = sensors.join();
     let _ = media.join();
     let _ = game_stats.join();
+    let _ = discord.join();
     let _ = std::fs::remove_file(socket_path());
     Ok(())
 }

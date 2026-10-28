@@ -273,7 +273,18 @@ pub enum Action {
     Page(String),
     /// Cycle through LCD modes.
     CycleLcd,
+    /// Discord call control: one of [`DISCORD_ACTIONS`].
+    Discord(String),
 }
+
+/// Discord call controls, as (value, label).
+pub const DISCORD_ACTIONS: [(&str, &str); 5] = [
+    ("mute", "Mute / unmute"),
+    ("deafen", "Deafen / undeafen"),
+    ("camera", "Camera on / off"),
+    ("screenshare", "Screen share on / off"),
+    ("leave", "Leave call"),
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -308,6 +319,8 @@ pub enum NexusMode {
     Media,
     /// FPS, frame-time lows and hardware stats while gaming.
     Gaming,
+    /// Discord call controls: mute, deafen, camera, screen share, leave.
+    Call,
 }
 
 /// One cell of the Nexus game stats screen.

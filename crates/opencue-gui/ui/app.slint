@@ -394,9 +394,10 @@ export component AppWindow inherits Window {
     in-out property <int> btn-action;
     in-out property <string> btn-value;
     in property <string> btn-value-hint;
-    in property <bool> btn-value-is-media;
-    in property <[string]> media-names;
-    in-out property <int> btn-media-index;
+    in property <bool> btn-value-is-choice;
+    in property <string> btn-choice-label;
+    in property <[string]> choice-names;
+    in-out property <int> btn-choice-index;
     in property <bool> btn-value-is-keys;
     in-out property <bool> recording;
     callback nexus-changed();
@@ -423,6 +424,13 @@ export component AppWindow inherits Window {
     in property <bool> mangohud-can-setup;
     callback game-metric-toggled(int, bool);
     callback mangohud-setup();
+    // discord
+    in property <bool> discord-connected;
+    in property <bool> discord-has-app;
+    in property <string> discord-status;
+    callback discord-save(string, string);
+    callback discord-connect();
+    callback discord-disconnect();
 
     // settings
     in-out property <bool> fahrenheit;
@@ -850,7 +858,7 @@ export component AppWindow inherits Window {
                         spacing: 12px;
                         Text { text: "Mode"; color: Theme.text; vertical-alignment: center; }
                         Segmented {
-                            items: ["Buttons", "System info", "Clock", "Now playing", "Game stats"];
+                            items: ["Buttons", "System info", "Clock", "Now playing", "Game stats", "Call"];
                             current <=> root.nexus-mode;
                             selected => { root.nexus-changed(); }
                         }
@@ -894,6 +902,53 @@ export component AppWindow inherits Window {
                         if root.mangohud-can-setup: HorizontalLayout {
                             alignment: start;
                             Button { text: "Set up MangoHud"; clicked => { root.mangohud-setup(); } }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+                if root.nexus-mode == 5: HorizontalLayout {
+                    spacing: 16px;
+                    Card {
+                        title: "DISCORD";
+                        Text { text: root.discord-status; color: root.discord-connected ? Theme.ok : Theme.text; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            if !root.discord-connected && root.discord-has-app: Button {
+                                text: "Connect";
+                                clicked => { root.discord-connect(); }
+                            }
+                            if root.discord-connected: Button {
+                                text: "Disconnect";
+                                clicked => { root.discord-disconnect(); }
+                            }
+                        }
+                        Text {
+                            text: "Mute, deafen, camera, screen share and leave work from this mode, from Discord buttons on any page (action: Discord call), and from the terminal or a keyboard shortcut: opencue discord mute.";
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    Card {
+                        title: "DISCORD APPLICATION";
+                        Text {
+                            text: "Discord only lets apps you own control calls. Once: create an application at discord.com/developers/applications, add the redirect http://localhost under OAuth2, then paste its Client ID and Client Secret here. Discord asks you to authorise OpenCUE.";
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
+                        discord-id := LineEdit { placeholder-text: root.discord-has-app ? "Client ID (saved)" : "Client ID"; }
+                        discord-secret := LineEdit { placeholder-text: root.discord-has-app ? "Client Secret (saved)" : "Client Secret"; input-type: password; }
+                        HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: "Save and connect";
+                                enabled: discord-id.text != "" && discord-secret.text != "";
+                                clicked => {
+                                    root.discord-save(discord-id.text, discord-secret.text);
+                                    discord-secret.text = "";
+                                }
+                            }
                         }
                         Rectangle { vertical-stretch: 1; }
                     }
@@ -961,16 +1016,16 @@ export component AppWindow inherits Window {
                                 selected => { root.btn-action-changed(self.current-index); }
                             }
                         }
-                        if root.btn-value-is-media: HorizontalLayout {
+                        if root.btn-value-is-choice: HorizontalLayout {
                             spacing: 12px;
-                            Text { text: "Media key"; color: Theme.text; width: 90px; vertical-alignment: center; }
+                            Text { text: root.btn-choice-label; color: Theme.text; width: 90px; vertical-alignment: center; }
                             ComboBox {
-                                model: root.media-names;
-                                current-index <=> root.btn-media-index;
+                                model: root.choice-names;
+                                current-index <=> root.btn-choice-index;
                                 selected => { root.button-changed(); }
                             }
                         }
-                        if root.btn-value-hint != "" && !root.btn-value-is-media: HorizontalLayout {
+                        if root.btn-value-hint != "" && !root.btn-value-is-choice: HorizontalLayout {
                             spacing: 12px;
                             Text { text: "Value"; color: Theme.text; width: 90px; vertical-alignment: center; }
                             LineEdit {
