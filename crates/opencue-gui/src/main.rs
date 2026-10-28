@@ -1,6 +1,8 @@
 //! OpenCUE control app. Talks to the daemon over IPC; all previews use the daemon's own renderers.
 
 use std::cell::RefCell;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
@@ -829,6 +831,65 @@ fn set_login_entry(minimized: Option<bool>) {
     }
 }
 
+// ------------------------------------------------------------------------------- one window
+
+const PAGES: [&str; 6] = ["dashboard", "cooling", "lighting", "lcd", "nexus", "settings"];
+
+fn window_socket() -> std::path::PathBuf {
+    opencue_core::ipc::socket_path().with_file_name("opencue-gui.sock")
+}
+
+/// The first copy owns the socket; a later launch asks it to show its window, then exits.
+enum Launch {
+    First(Option<UnixListener>),
+    HandedOver,
+}
+
+/// `show` is the page to show the window on, or `None` to leave it as it is (a login launch).
+fn claim_window(show: Option<&str>) -> Launch {
+    let path = window_socket();
+    for _ in 0..2 {
+        match UnixListener::bind(&path) {
+            Ok(listener) => return Launch::First(Some(listener)),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                if let Ok(mut stream) = UnixStream::connect(&path) {
+                    if let Some(page) = show {
+                        let _ = writeln!(stream, "show {page}");
+                    }
+                    return Launch::HandedOver;
+                }
+                // Left behind by a copy that crashed.
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(e) => {
+                log::warn!("cannot listen on {}: {e}", path.display());
+                break;
+            }
+        }
+    }
+    Launch::First(None)
+}
+
+fn listen_for_launches(listener: UnixListener, ui: slint::Weak<AppWindow>) {
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut line = String::new();
+            let _ = BufReader::new(stream).read_line(&mut line);
+            let Some(page) = line.trim().strip_prefix("show").map(|p| p.trim().to_string()) else { continue };
+            let ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = ui.upgrade() else { return };
+                if let Some(i) = PAGES.iter().position(|n| *n == page) {
+                    ui.set_page(i as i32);
+                }
+                // Wayland has no way for an app to un-minimize itself, so map the window afresh.
+                let _ = ui.hide();
+                let _ = ui.show();
+            });
+        }
+    });
+}
+
 // ------------------------------------------------------------------------------- main
 
 fn main() -> anyhow::Result<()> {
@@ -839,6 +900,14 @@ fn main() -> anyhow::Result<()> {
     // `--screenshot <page> <file.png>` renders off-screen and exits.
     let screenshot =
         arg("--screenshot", 1).map(|page| (page, arg("--screenshot", 2).unwrap_or_else(|| "opencue.png".into())));
+    let minimized = args.iter().any(|a| a == "--minimized");
+    let listener = match screenshot {
+        Some(_) => None,
+        None => match claim_window((!minimized).then(|| arg("--page", 1).unwrap_or_default()).as_deref()) {
+            Launch::First(listener) => listener,
+            Launch::HandedOver => return Ok(()),
+        },
+    };
     let offscreen = match screenshot {
         Some(_) => Some(screenshot::install()?),
         None => {
@@ -1519,9 +1588,8 @@ fn main() -> anyhow::Result<()> {
     schedule_gif(ui.as_weak());
 
     // `opencue-gui --page lighting` opens on a given page.
-    let pages = ["dashboard", "cooling", "lighting", "lcd", "nexus", "settings"];
     let wanted = screenshot.as_ref().map(|s| s.0.clone()).or_else(|| arg("--page", 1));
-    if let Some(i) = wanted.and_then(|p| pages.iter().position(|n| *n == p)) {
+    if let Some(i) = wanted.and_then(|p| PAGES.iter().position(|n| *n == p)) {
         ui.set_page(i as i32);
     }
 
@@ -1544,9 +1612,18 @@ fn main() -> anyhow::Result<()> {
     }
 
     spawn_poller(ui.as_weak());
+    let owns_socket = listener.is_some();
+    if let Some(listener) = listener {
+        listen_for_launches(listener, ui.as_weak());
+    }
+    // Showing the window again hides it first, so only closing it ends the app.
+    ui.window().on_close_requested(|| {
+        let _ = slint::quit_event_loop();
+        slint::CloseRequestResponse::HideWindow
+    });
+    ui.show()?;
     // `--minimized` is how the login entry starts it.
-    if args.iter().any(|a| a == "--minimized") {
-        ui.show()?;
+    if minimized {
         // The compositor only minimizes a window once it is mapped.
         let w = ui.as_weak();
         Timer::single_shot(Duration::from_millis(200), move || {
@@ -1554,10 +1631,11 @@ fn main() -> anyhow::Result<()> {
                 ui.window().set_minimized(true);
             }
         });
-        slint::run_event_loop()?;
-        ui.hide()?;
-    } else {
-        ui.run()?;
+    }
+    slint::run_event_loop_until_quit()?;
+    let _ = ui.hide();
+    if owns_socket {
+        let _ = std::fs::remove_file(window_socket());
     }
     Ok(())
 }
