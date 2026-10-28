@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use opencue_core::config::{Action, Config, LcdMode, NexusMode, Profile, Sensor};
@@ -137,6 +137,13 @@ fn nap(shared: &Shared, d: Duration) {
     }
 }
 
+/// Each Commander Core channel is a step further along, so waves ripple from fan to fan.
+fn cc_phase(i: usize, n: usize) -> f32 {
+    i as f32 / n.max(1) as f32
+}
+
+const MM700_PHASE: f32 = 0.5;
+
 /// Lighting frame for one zone.
 fn zone_frame(
     profile: &Profile,
@@ -172,10 +179,11 @@ fn run_commander_core(sh: &Shared, found: &Found, has_lcd: bool) -> Result<()> {
     let zones: Vec<(u8, String)> = cc.led_counts.keys().map(|&ch| (ch, format!("cc:{}", channel_name(ch)))).collect();
     sh.telemetry(|t| {
         t.zones.retain(|z| !z.id.starts_with("cc:"));
-        for (ch, id) in &zones {
+        for (i, (ch, id)) in zones.iter().enumerate() {
             let count = cc.led_counts[ch];
             let name = if *ch == 0 { "Pump".to_string() } else { format!("Fan {ch} · {}", led_device_name(count)) };
-            t.zones.push(LightingZone { id: id.clone(), name, leds: count as usize });
+            let phase = cc_phase(i, zones.len());
+            t.zones.push(LightingZone { id: id.clone(), name, leds: count as usize, phase });
         }
     });
 
@@ -260,12 +268,12 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
 
         // Lighting
         let t = sh.elapsed();
-        let n = zones.len().max(1) as f32;
         let colors: BTreeMap<u8, Vec<[u8; 3]>> = zones
             .iter()
             .enumerate()
             .map(|(i, (ch, id))| {
-                (*ch, zone_frame(profile, id, cc.led_counts[ch] as usize, i as f32 / n, t, liquid, &sys))
+                let phase = cc_phase(i, zones.len());
+                (*ch, zone_frame(profile, id, cc.led_counts[ch] as usize, phase, t, liquid, &sys))
             })
             .collect();
         if last_colors.as_ref() != Some(&colors) || now - last_color_write > Duration::from_secs(5) {
@@ -592,7 +600,12 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
     });
     sh.telemetry(|t| {
         t.zones.retain(|z| z.id != "mm700");
-        t.zones.push(LightingZone { id: "mm700".into(), name: "MM700 mousepad".into(), leds: mm700::ZONES });
+        t.zones.push(LightingZone {
+            id: "mm700".into(),
+            name: "MM700 mousepad".into(),
+            leds: mm700::ZONES,
+            phase: MM700_PHASE,
+        });
     });
     let result = (|| -> Result<()> {
         let mut last: Option<Vec<[u8; 3]>> = None;
@@ -602,7 +615,7 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
             let now = Instant::now();
             let cfg = sh.config();
             let (liquid, sys) = sh.telemetry(|t| (t.liquid_temp, t.system.clone()));
-            let colors = zone_frame(cfg.profile(), "mm700", mm700::ZONES, 0.5, sh.elapsed(), liquid, &sys);
+            let colors = zone_frame(cfg.profile(), "mm700", mm700::ZONES, MM700_PHASE, sh.elapsed(), liquid, &sys);
             if last.as_ref() != Some(&colors) || now - last_write > Duration::from_secs(5) {
                 pad.write_colors(&colors)?;
                 last = Some(colors);
@@ -826,7 +839,10 @@ pub fn run() -> Result<()> {
     let sh = Arc::new(Shared {
         config: RwLock::new(Config::load()),
         rev: AtomicU64::new(0),
-        telemetry: Mutex::new(Telemetry::default()),
+        telemetry: Mutex::new(Telemetry {
+            effect_epoch: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64()),
+            ..Default::default()
+        }),
         stop,
         rescan: AtomicBool::new(false),
         nexus_page: AtomicUsize::new(0),

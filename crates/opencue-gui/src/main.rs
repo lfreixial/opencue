@@ -1571,7 +1571,16 @@ fn main() -> anyhow::Result<()> {
                 Sensor::Cpu => app.tel.system.cpu_temp,
                 Sensor::Gpu => app.tel.system.gpu_temp,
             };
-            let frame = lighting::render(&l, app.epoch.elapsed().as_secs_f64(), n, 0.0, temp);
+            // The daemon's clock and the zone's offset, so the preview shows what the devices do.
+            let t = match app.tel.effect_epoch {
+                e if e > 0.0 => {
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+                        - e
+                }
+                _ => app.epoch.elapsed().as_secs_f64(),
+            };
+            let phase = app.tel.zones.iter().find(|z| z.id == zone).map_or(0.0, |z| z.phase);
+            let frame = lighting::render(&l, t, n, phase, temp);
             update_model(&app.leds, frame.into_iter().map(|[r, g, b]| Color::from_rgb_u8(r, g, b)).collect());
         });
     });

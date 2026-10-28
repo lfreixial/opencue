@@ -30,6 +30,9 @@ pub struct LightingZone {
     pub id: String,
     pub name: String,
     pub leds: usize,
+    /// The offset effects get on this zone (see `lighting::render`), so the preview matches it.
+    #[serde(default)]
+    pub phase: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -46,6 +49,10 @@ pub struct Telemetry {
     /// Bumped whenever the daemon's config changes (GUI uses it to refetch).
     #[serde(default)]
     pub config_rev: u64,
+    /// When the daemon's effect clock started, in seconds since the Unix epoch, so the preview
+    /// can show the same moment of an effect as the devices.
+    #[serde(default)]
+    pub effect_epoch: f64,
     /// What the chosen media player is playing (only tracked while the Nexus shows it).
     #[serde(default)]
     pub now_playing: Option<NowPlaying>,
