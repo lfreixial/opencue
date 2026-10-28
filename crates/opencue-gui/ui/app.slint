@@ -886,7 +886,7 @@ export component AppWindow inherits Window {
                     Card {
                         title: "FPS FROM MANGOHUD";
                         Text {
-                            text: "FPS, lows and stutters come from MangoHud, which must be enabled for the game (for example the Steam launch option: mangohud %command%). Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
+                            text: "FPS, lows and stutters come from MangoHud. Setting it up turns it on for every Vulkan game (including Proton games), with its overlay hidden (Shift_R+F12 shows it). OpenGL-only games still need the launch option mangohud %command%. Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
                             color: Theme.muted;
                             wrap: word-wrap;
                         }
@@ -1029,7 +1029,7 @@ export component AppWindow inherits Window {
                 spacing: 16px;
                 Card {
                     title: "GENERAL";
-                    Switch { text: "Start OpenCUE when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
+                    Switch { text: "Start OpenCUE minimized when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
                     Switch { text: "Show temperatures in Fahrenheit"; checked <=> root.fahrenheit; toggled => { root.settings-changed(); } }
                     Switch { text: "Hand devices back to hardware mode when OpenCUE stops"; checked <=> root.restore-hw; toggled => { root.settings-changed(); } }
                     Text {

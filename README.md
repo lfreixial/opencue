@@ -55,14 +55,16 @@ cd opencue
 sudo ./install.sh --udev   # once: give your user access to the devices (no root at runtime)
 ```
 
-Then open **OpenCUE** from your app menu, or run `opencue-gui`.
+Then open **OpenCUE** from your app menu, or run `opencue-gui`. From then on it opens minimized at login
+(`~/.config/autostart/opencue.desktop`, turned off with the switch in Settings).
 
 Uninstall:
 
 ```sh
 systemctl --user disable --now opencue
 rm ~/.local/bin/opencue ~/.local/bin/opencue-gui ~/.config/systemd/user/opencue.service \
-   ~/.local/share/applications/opencue.desktop ~/.local/share/icons/hicolor/scalable/apps/opencue.svg
+   ~/.local/share/applications/opencue.desktop ~/.local/share/icons/hicolor/scalable/apps/opencue.svg \
+   ~/.config/autostart/opencue.desktop
 sudo rm /etc/udev/rules.d/70-opencue.rules
 ```
 
@@ -81,6 +83,9 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
 
 ## Troubleshooting
 
+- **The window opens (not minimized) at login on KDE Plasma**: Plasma restores apps that were open when
+  you logged out. Exclude it in System Settings, Session, Desktop Session, "Applications to be excluded
+  from session" (`opencue-gui`), and the login entry opens it minimized instead.
 - **"no permission for /dev/hidrawN"**: run `sudo ./install.sh --udev`, then unplug and replug the
   device (or reboot).
 - **Nexus shortcuts do nothing**: the udev rule also grants access to `/dev/uinput`, which is used to
@@ -88,12 +93,14 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
 - **Now playing shows nothing**: the player has to support MPRIS. Spotify, browsers, VLC and most music
   players do; mpv needs the `mpv-mpris` plugin (`sudo pacman -S mpv-mpris`). Cover art from the web is
   downloaded with `curl`, and local videos without art get a thumbnail made with `ffmpeg`.
-- **Game stats show `--` for FPS**: the game has to run with MangoHud (for Steam, the launch option
-  `mangohud %command%`), and MangoHud has to be set up from the Nexus page (Game stats, Set up MangoHud). That
-  adds `autostart_log=1`, `log_interval=0` and `output_folder` to `~/.config/MangoHud/MangoHud.conf`, so MangoHud
-  logs every frame to `~/.cache/opencue/mangohud/` (about 15 KB per second of play; OpenCUE deletes each log a
-  couple of minutes after the game closes). A per-game MangoHud config replaces the global one, so add the same
-  three lines there too.
+- **Game stats show `--` for FPS**: MangoHud has to be set up from the Nexus page (Game stats, Set up MangoHud),
+  then log out and back in. That sets `MANGOHUD=1` in `~/.config/environment.d/opencue-mangohud.conf`, so every
+  Vulkan game (including everything running through Proton) loads MangoHud, and adds `no_display`,
+  `autostart_log=1`, `log_interval=0` and `output_folder` to `~/.config/MangoHud/MangoHud.conf`. The overlay stays
+  hidden (MangoHud's toggle key, Shift_R+F12 by default, shows it) while it logs every frame to
+  `~/.cache/opencue/mangohud/` (about 15 KB per second of play; OpenCUE deletes each log a couple of minutes after
+  the game closes). OpenGL-only games still need the launch option `mangohud %command%`. A per-game MangoHud
+  config replaces the global one, so add the same lines there too.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 

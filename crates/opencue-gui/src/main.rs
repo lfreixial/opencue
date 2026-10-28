@@ -505,10 +505,15 @@ fn sync_game_stats(ui: &AppWindow, chosen: &[GameMetric]) {
     ui.set_game_metrics_count(ss(format!("{} OF {}", chosen.len(), GameMetric::MAX_SHOWN)));
     let status = gamestats::mangohud_status();
     ui.set_mangohud_status(ss(match status {
-        MangoHudStatus::Ready => "MangoHud is set up: games started with MangoHud send their FPS to the Nexus.".into(),
+        // environment.d is only read at login.
+        MangoHudStatus::Ready if std::env::var_os("MANGOHUD").is_none() => {
+            "MangoHud is set up. Log out and back in to turn it on for every game.".into()
+        }
+        MangoHudStatus::Ready => "MangoHud is on for every Vulkan game, with its overlay hidden.".into(),
         MangoHudStatus::NotSetUp => format!(
-            "MangoHud is installed but not set up. This adds 3 lines to {} so it logs frame times for OpenCUE.",
-            gamestats::mangohud_config().display()
+            "MangoHud is installed but not set up for OpenCUE. This adds a few lines to {} and sets MANGOHUD=1 in {}.",
+            gamestats::mangohud_config().display(),
+            gamestats::env_file().display()
         ),
         MangoHudStatus::NotInstalled => "MangoHud is not installed (sudo pacman -S mangohud lib32-mangohud).".into(),
     }));
@@ -761,6 +766,31 @@ fn autostart_enabled() -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "enabled")
 }
 
+/// The XDG autostart entry that opens the app minimized at login (the daemon is a systemd service).
+fn login_entry() -> std::path::PathBuf {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
+    config.join("autostart").join("opencue.desktop")
+}
+
+fn set_login_entry(on: bool) {
+    let path = login_entry();
+    if !on {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=OpenCUE\nComment=Open OpenCUE minimized at login\nExec=\"{}\" --minimized\nIcon=opencue\nTerminal=false\nNoDisplay=true\n",
+        exe.display()
+    );
+    if let Err(e) = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, entry)) {
+        log::warn!("cannot write {}: {e}", path.display());
+    }
+}
+
 // ------------------------------------------------------------------------------- main
 
 fn main() -> anyhow::Result<()> {
@@ -787,7 +817,12 @@ fn main() -> anyhow::Result<()> {
     ui.set_curve_points(ModelRc::from(curve_points.clone()));
     ui.set_led_preview(ModelRc::from(leds.clone()));
     ui.set_version(ss(env!("CARGO_PKG_VERSION")));
-    ui.set_autostart(autostart_enabled());
+    let autostart = autostart_enabled();
+    ui.set_autostart(autostart);
+    if autostart && screenshot.is_none() {
+        // Keeps the entry pointing at this binary, and adds it for installs from before it existed.
+        set_login_entry(true);
+    }
 
     APP.with(|a| {
         *a.borrow_mut() = Some(App {
@@ -1359,6 +1394,7 @@ fn main() -> anyhow::Result<()> {
         let _ = std::process::Command::new("systemctl")
             .args(["--user", if on { "enable" } else { "disable" }, "opencue.service"])
             .status();
+        set_login_entry(on);
     });
 
     // -- timers: LED preview at 30 fps, screen previews once a second, GIF at its own pace
@@ -1421,7 +1457,21 @@ fn main() -> anyhow::Result<()> {
     }
 
     spawn_poller(ui.as_weak());
-    ui.run()?;
+    // `--minimized` is how the login entry starts it.
+    if args.iter().any(|a| a == "--minimized") {
+        ui.show()?;
+        // The compositor only minimizes a window once it is mapped.
+        let w = ui.as_weak();
+        Timer::single_shot(Duration::from_millis(200), move || {
+            if let Some(ui) = w.upgrade() {
+                ui.window().set_minimized(true);
+            }
+        });
+        slint::run_event_loop()?;
+        ui.hide()?;
+    } else {
+        ui.run()?;
+    }
     Ok(())
 }
 
