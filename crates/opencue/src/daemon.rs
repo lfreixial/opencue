@@ -15,7 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use opencue_core::config::{Action, Config, LcdMode, NexusMode, Profile, Sensor};
+use opencue_core::config::{Action, Config, LcdMode, Lighting, NexusMode, Profile, Sensor};
 use opencue_core::cooling::{DutyController, curve};
 use opencue_core::devices::commander_core::{self, CommanderCore, channel_name, led_device_name};
 use opencue_core::devices::lcd_cap::LcdCap;
@@ -24,7 +24,7 @@ use opencue_core::devices::nexus::{Nexus, Touch};
 use opencue_core::devices::{Found, Kind, discover};
 use opencue_core::gamestats::{self, LogTracker};
 use opencue_core::ipc::{Request, Response, socket_path};
-use opencue_core::lighting;
+use opencue_core::lighting::{self, EffectClock};
 use opencue_core::render;
 use opencue_core::sensors::{SensorReader, SystemSensors};
 use opencue_core::telemetry::{ChannelState, DeviceState, LightingZone, Telemetry};
@@ -110,8 +110,11 @@ impl Shared {
         self.telemetry(|t| t.devices.retain(|d| d.key != key));
     }
 
-    fn elapsed(&self) -> f64 {
-        self.epoch.elapsed().as_secs_f64()
+    /// Advance `zone`'s effect clock (kept in telemetry, so the app's preview can follow it).
+    fn effect_pos(&self, zone: &str, cfg: &Lighting) -> f64 {
+        let now = lighting::unix_now();
+        self.telemetry(|t| t.zones.iter_mut().find(|z| z.id == zone).map(|z| z.clock.follow(cfg, now)))
+            .unwrap_or_else(|| self.epoch.elapsed().as_secs_f64() * lighting::rate(cfg))
     }
 }
 
@@ -137,18 +140,38 @@ fn nap(shared: &Shared, d: Duration) {
     }
 }
 
+/// Each Commander Core channel is a step further along, so waves ripple from fan to fan.
+fn cc_phase(i: usize, n: usize) -> f32 {
+    i as f32 / n.max(1) as f32
+}
+
+const MM700_PHASE: f32 = 0.5;
+
+/// The clock for a zone being (re)connected: its own if it had one, otherwise another zone's, so
+/// a device that turns up later shows the same moment of an effect as the rest.
+fn zone_clock(t: &Telemetry, id: &str) -> EffectClock {
+    let started = |z: &&LightingZone| z.clock.at > 0.0;
+    t.zones
+        .iter()
+        .filter(started)
+        .find(|z| z.id == id)
+        .or(t.zones.iter().find(started))
+        .map_or_else(|| EffectClock { at: lighting::unix_now(), ..Default::default() }, |z| z.clock)
+}
+
 /// Lighting frame for one zone.
 fn zone_frame(
+    sh: &Shared,
     profile: &Profile,
     zone: &str,
     leds: usize,
     phase: f32,
-    t: f64,
     liquid: Option<f32>,
     sys: &SystemSensors,
 ) -> Vec<[u8; 3]> {
     let cfg = profile.lighting_for(zone);
-    lighting::render(&cfg, t, leds, phase, sensor_value(cfg.sensor, liquid, sys))
+    let pos = sh.effect_pos(zone, &cfg);
+    lighting::render(&cfg, pos, leds, phase, sensor_value(cfg.sensor, liquid, sys))
 }
 
 fn zones_animated(profile: &Profile, zones: &[&str]) -> bool {
@@ -171,11 +194,13 @@ fn run_commander_core(sh: &Shared, found: &Found, has_lcd: bool) -> Result<()> {
     });
     let zones: Vec<(u8, String)> = cc.led_counts.keys().map(|&ch| (ch, format!("cc:{}", channel_name(ch)))).collect();
     sh.telemetry(|t| {
+        let clocks: Vec<EffectClock> = zones.iter().map(|(_, id)| zone_clock(t, id)).collect();
         t.zones.retain(|z| !z.id.starts_with("cc:"));
-        for (ch, id) in &zones {
+        for (i, (ch, id)) in zones.iter().enumerate() {
             let count = cc.led_counts[ch];
             let name = if *ch == 0 { "Pump".to_string() } else { format!("Fan {ch} · {}", led_device_name(count)) };
-            t.zones.push(LightingZone { id: id.clone(), name, leds: count as usize });
+            let phase = cc_phase(i, zones.len());
+            t.zones.push(LightingZone { id: id.clone(), name, leds: count as usize, phase, clock: clocks[i] });
         }
     });
 
@@ -259,13 +284,12 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
         seen_rev = rev;
 
         // Lighting
-        let t = sh.elapsed();
-        let n = zones.len().max(1) as f32;
         let colors: BTreeMap<u8, Vec<[u8; 3]>> = zones
             .iter()
             .enumerate()
             .map(|(i, (ch, id))| {
-                (*ch, zone_frame(profile, id, cc.led_counts[ch] as usize, i as f32 / n, t, liquid, &sys))
+                let phase = cc_phase(i, zones.len());
+                (*ch, zone_frame(sh, profile, id, cc.led_counts[ch] as usize, phase, liquid, &sys))
             })
             .collect();
         if last_colors.as_ref() != Some(&colors) || now - last_color_write > Duration::from_secs(5) {
@@ -591,8 +615,15 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
         error: None,
     });
     sh.telemetry(|t| {
+        let clock = zone_clock(t, "mm700");
         t.zones.retain(|z| z.id != "mm700");
-        t.zones.push(LightingZone { id: "mm700".into(), name: "MM700 mousepad".into(), leds: mm700::ZONES });
+        t.zones.push(LightingZone {
+            id: "mm700".into(),
+            name: "MM700 mousepad".into(),
+            leds: mm700::ZONES,
+            phase: MM700_PHASE,
+            clock,
+        });
     });
     let result = (|| -> Result<()> {
         let mut last: Option<Vec<[u8; 3]>> = None;
@@ -602,7 +633,7 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
             let now = Instant::now();
             let cfg = sh.config();
             let (liquid, sys) = sh.telemetry(|t| (t.liquid_temp, t.system.clone()));
-            let colors = zone_frame(cfg.profile(), "mm700", mm700::ZONES, 0.5, sh.elapsed(), liquid, &sys);
+            let colors = zone_frame(sh, cfg.profile(), "mm700", mm700::ZONES, MM700_PHASE, liquid, &sys);
             if last.as_ref() != Some(&colors) || now - last_write > Duration::from_secs(5) {
                 pad.write_colors(&colors)?;
                 last = Some(colors);

@@ -30,6 +30,12 @@ pub struct LightingZone {
     pub id: String,
     pub name: String,
     pub leds: usize,
+    /// The offset effects get on this zone (see `lighting::render`), so the preview matches it.
+    #[serde(default)]
+    pub phase: f32,
+    /// Where this zone's effect is, so the preview shows the same moment.
+    #[serde(default)]
+    pub clock: crate::lighting::EffectClock,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

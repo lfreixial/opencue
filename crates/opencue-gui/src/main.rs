@@ -65,7 +65,8 @@ struct App {
     connected: bool,
     seen_rev: Option<u64>,
     last_edit: Instant,
-    epoch: Instant,
+    /// The lighting preview's effect clock (the daemon's, while connected).
+    clock: lighting::EffectClock,
     /// Width / height of the curve editor's graph area.
     curve_aspect: f32,
     lcd_anim: Option<LcdAnim>,
@@ -939,7 +940,7 @@ fn main() -> anyhow::Result<()> {
             connected: false,
             seen_rev: None,
             last_edit: Instant::now() - Duration::from_secs(60),
-            epoch: Instant::now(),
+            clock: lighting::EffectClock::default(),
             curve_aspect: 2.0,
             lcd_anim: None,
             lcd_loading: None,
@@ -1571,7 +1572,15 @@ fn main() -> anyhow::Result<()> {
                 Sensor::Cpu => app.tel.system.cpu_temp,
                 Sensor::Gpu => app.tel.system.gpu_temp,
             };
-            let frame = lighting::render(&l, app.epoch.elapsed().as_secs_f64(), n, 0.0, temp);
+            // Follow the zone's clock and offset from the daemon, so the preview shows what the
+            // devices do. Without the daemon, the preview keeps its own clock.
+            let z = app.tel.zones.iter().find(|z| z.id == zone);
+            let phase = z.map_or(0.0, |z| z.phase);
+            if let Some(clock) = z.or(app.tel.zones.first()).map(|z| z.clock).filter(|c| c.at > 0.0) {
+                app.clock = clock;
+            }
+            let pos = app.clock.follow(&l, lighting::unix_now());
+            let frame = lighting::render(&l, pos, n, phase, temp);
             update_model(&app.leds, frame.into_iter().map(|[r, g, b]| Color::from_rgb_u8(r, g, b)).collect());
         });
     });
