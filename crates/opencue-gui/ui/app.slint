@@ -757,10 +757,19 @@ export component AppWindow inherits Window {
                             for c in root.led-preview: Rectangle {
                                 width: 22px;
                                 height: 22px;
-                                border-radius: 11px;
-                                background: c;
-                                drop-shadow-blur: 8px;
-                                drop-shadow-color: c;
+                                // The glow is a gradient, not a drop shadow: shadows are re-blurred
+                                // whenever the colour changes, which is every frame for most effects.
+                                // Fades out 4px past the dot, so it never covers its neighbours. The
+                                // gradient's 100% is the box corner: 52% is the dot's edge, 70% the box's.
+                                Rectangle {
+                                    width: 30px;
+                                    height: 30px;
+                                    background: @radial-gradient(circle, c.with-alpha(0.6) 50%, c.with-alpha(0) 70%);
+                                }
+                                Rectangle {
+                                    border-radius: 11px;
+                                    background: c;
+                                }
                             }
                         }
                     }

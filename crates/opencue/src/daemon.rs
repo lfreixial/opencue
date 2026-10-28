@@ -308,6 +308,8 @@ fn run_lcd(sh: &Shared, found: &Found) -> Result<()> {
 fn lcd_loop(sh: &Shared, lcd: &LcdCap) -> Result<()> {
     let mut applied: Option<(u8, u16)> = None;
     let mut media: Option<Media> = None;
+    // The last rendered screen's pixels and its JPEG.
+    let mut last: Option<(Vec<u8>, Vec<u8>)> = None;
     let mut frame = 0usize;
     let mut next = Instant::now();
     let mut seen_rev = u64::MAX;
@@ -371,7 +373,14 @@ fn lcd_loop(sh: &Shared, lcd: &LcdCap) -> Result<()> {
                 None => {
                     let t = sh.telemetry(|t| t.clone());
                     let img = render::lcd::render(&lc, &t, cfg.settings.fahrenheit);
-                    lcd.write_jpeg(&render::lcd::encode_jpeg(&img))?;
+                    // Readings often hold steady for a while; encoding is most of the cost.
+                    if last.as_ref().is_none_or(|(prev, _)| prev != img.as_raw()) {
+                        let jpeg = render::lcd::encode_jpeg(&img);
+                        last = Some((img.into_raw(), jpeg));
+                    }
+                    if let Some((_, jpeg)) = &last {
+                        lcd.write_jpeg(jpeg)?;
+                    }
                     next = Instant::now() + Duration::from_secs(1);
                 }
             }

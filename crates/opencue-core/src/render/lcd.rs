@@ -4,7 +4,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use image::codecs::gif::GifDecoder;
-use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{AnimationDecoder, DynamicImage, ImageReader, RgbaImage};
 
@@ -63,9 +62,11 @@ fn fit(img: RgbaImage, cover: bool, background: [u8; 3]) -> RgbaImage {
 }
 
 pub fn encode_jpeg(img: &RgbaImage) -> Vec<u8> {
-    let rgb = DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+    // jpeg-encoder takes RGBA as is and is about twice as fast as image's encoder.
     let mut out = Vec::with_capacity(64 * 1024);
-    JpegEncoder::new_with_quality(&mut out, 90).encode_image(&rgb).expect("in-memory JPEG encoding");
+    jpeg_encoder::Encoder::new(&mut out, 90)
+        .encode(img.as_raw(), img.width() as u16, img.height() as u16, jpeg_encoder::ColorType::Rgba)
+        .expect("in-memory JPEG encoding");
     out
 }
 

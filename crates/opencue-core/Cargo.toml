@@ -12,6 +12,7 @@ readme = "../../README.md"
 anyhow = "1.0.104"
 fontdue = "0.9.5"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp", "bmp"] }
+jpeg-encoder = { version = "0.6.1", features = ["simd"] }
 libc = "0.2.191"
 log = "0.4.34"
 serde = { version = "1.0.229", features = ["derive"] }
