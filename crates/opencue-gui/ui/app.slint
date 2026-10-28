@@ -428,11 +428,13 @@ export component AppWindow inherits Window {
     in-out property <bool> fahrenheit;
     in-out property <bool> restore-hw;
     in-out property <bool> autostart;
+    in-out property <bool> start-minimized: true;
     in-out property <float> min-fan;
     in-out property <float> crit-liquid;
     in-out property <float> crit-cpu;
     callback settings-changed();
     callback autostart-toggled(bool);
+    callback start-minimized-toggled(bool);
 
     HorizontalLayout {
         // ---------------------------------------------------------------- sidebar
@@ -1029,7 +1031,13 @@ export component AppWindow inherits Window {
                 spacing: 16px;
                 Card {
                     title: "GENERAL";
-                    Switch { text: "Start OpenCUE minimized when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
+                    Switch { text: "Start OpenCUE when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
+                    Switch {
+                        text: "Keep the window minimized at login";
+                        enabled: root.autostart;
+                        checked <=> root.start-minimized;
+                        toggled => { root.start-minimized-toggled(self.checked); }
+                    }
                     Switch { text: "Show temperatures in Fahrenheit"; checked <=> root.fahrenheit; toggled => { root.settings-changed(); } }
                     Switch { text: "Hand devices back to hardware mode when OpenCUE stops"; checked <=> root.restore-hw; toggled => { root.settings-changed(); } }
                     Text {

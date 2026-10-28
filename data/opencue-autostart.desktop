@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenCUE
+Comment=Open OpenCUE at login
+Exec=opencue-gui --minimized
+Icon=opencue
+Terminal=false
+NoDisplay=true

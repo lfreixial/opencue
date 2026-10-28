@@ -28,6 +28,12 @@ install -d "$HOME/.local/share/applications"
 sed "s|^Exec=opencue-gui$|Exec=$HOME/.local/bin/opencue-gui|" data/opencue.desktop \
     > "$HOME/.local/share/applications/opencue.desktop"
 chmod 644 "$HOME/.local/share/applications/opencue.desktop"
+# Open the app minimized at login. Left alone if it exists, since the app's Settings change it.
+if [[ ! -e "$HOME/.config/autostart/opencue.desktop" ]]; then
+    install -d "$HOME/.config/autostart"
+    sed "s|^Exec=opencue-gui|Exec=$HOME/.local/bin/opencue-gui|" data/opencue-autostart.desktop \
+        > "$HOME/.config/autostart/opencue.desktop"
+fi
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$HOME/.local/share/applications" || true
 install -Dm644 data/opencue.svg "$HOME/.local/share/icons/hicolor/scalable/apps/opencue.svg"
 systemctl --user daemon-reload

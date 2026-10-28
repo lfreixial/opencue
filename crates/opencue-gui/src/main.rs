@@ -766,26 +766,38 @@ fn autostart_enabled() -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "enabled")
 }
 
-/// The XDG autostart entry that opens the app minimized at login (the daemon is a systemd service).
+/// The XDG autostart entry that opens the app at login (the daemon is a systemd service).
+/// install.sh writes the same template.
+const LOGIN_ENTRY: &str = include_str!("../../../data/opencue-autostart.desktop");
+
 fn login_entry() -> std::path::PathBuf {
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
+        .unwrap_or_else(|| home.join(".config"));
     config.join("autostart").join("opencue.desktop")
 }
 
-fn set_login_entry(on: bool) {
+/// Whether the login entry opens the window minimized (the default when there is no entry).
+fn login_entry_minimized() -> bool {
+    std::fs::read_to_string(login_entry())
+        .map_or(true, |text| text.lines().find(|l| l.starts_with("Exec=")).is_none_or(|l| l.contains("--minimized")))
+}
+
+/// Write the login entry, or remove it with `None`. It runs the installed binary where there is
+/// one, so starting a build from `target/` doesn't take over login.
+fn set_login_entry(minimized: Option<bool>) {
     let path = login_entry();
-    if !on {
+    let Some(minimized) = minimized else {
         let _ = std::fs::remove_file(&path);
         return;
-    }
-    let Ok(exe) = std::env::current_exe() else { return };
-    let entry = format!(
-        "[Desktop Entry]\nType=Application\nName=OpenCUE\nComment=Open OpenCUE minimized at login\nExec=\"{}\" --minimized\nIcon=opencue\nTerminal=false\nNoDisplay=true\n",
-        exe.display()
-    );
+    };
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let installed = home.join(".local/bin/opencue-gui");
+    let exe = if installed.is_file() { installed } else { std::env::current_exe().unwrap_or(installed) };
+    let exec = format!("Exec={}{}", exe.display(), if minimized { " --minimized" } else { "" });
+    let entry = LOGIN_ENTRY.replace("Exec=opencue-gui --minimized", &exec);
     if let Err(e) = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, entry)) {
         log::warn!("cannot write {}: {e}", path.display());
     }
@@ -819,9 +831,10 @@ fn main() -> anyhow::Result<()> {
     ui.set_version(ss(env!("CARGO_PKG_VERSION")));
     let autostart = autostart_enabled();
     ui.set_autostart(autostart);
-    if autostart && screenshot.is_none() {
-        // Keeps the entry pointing at this binary, and adds it for installs from before it existed.
-        set_login_entry(true);
+    ui.set_start_minimized(login_entry_minimized());
+    if autostart && screenshot.is_none() && !login_entry().exists() {
+        // Installs from before the entry existed.
+        set_login_entry(Some(true));
     }
 
     APP.with(|a| {
@@ -1390,11 +1403,19 @@ fn main() -> anyhow::Result<()> {
             sync_settings,
         );
     });
-    ui.on_autostart_toggled(|on| {
+    let w = ui.as_weak();
+    ui.on_autostart_toggled(move |on| {
         let _ = std::process::Command::new("systemctl")
             .args(["--user", if on { "enable" } else { "disable" }, "opencue.service"])
             .status();
-        set_login_entry(on);
+        let ui = w.unwrap();
+        set_login_entry(on.then(|| ui.get_start_minimized()));
+    });
+    let w = ui.as_weak();
+    ui.on_start_minimized_toggled(move |minimized| {
+        if w.unwrap().get_autostart() {
+            set_login_entry(Some(minimized));
+        }
     });
 
     // -- timers: LED preview at 30 fps, screen previews once a second, GIF at its own pace

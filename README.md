@@ -55,8 +55,8 @@ cd opencue
 sudo ./install.sh --udev   # once: give your user access to the devices (no root at runtime)
 ```
 
-Then open **OpenCUE** from your app menu, or run `opencue-gui`. From then on it opens minimized at login
-(`~/.config/autostart/opencue.desktop`, turned off with the switch in Settings).
+Then open **OpenCUE** from your app menu, or run `opencue-gui`. It also opens minimized at login
+(`~/.config/autostart/opencue.desktop`); Settings has switches to turn that off or open the window normally.
 
 Uninstall:
 
