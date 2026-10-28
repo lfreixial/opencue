@@ -436,11 +436,13 @@ export component AppWindow inherits Window {
     in-out property <bool> fahrenheit;
     in-out property <bool> restore-hw;
     in-out property <bool> autostart;
+    in-out property <bool> start-minimized: true;
     in-out property <float> min-fan;
     in-out property <float> crit-liquid;
     in-out property <float> crit-cpu;
     callback settings-changed();
     callback autostart-toggled(bool);
+    callback start-minimized-toggled(bool);
 
     HorizontalLayout {
         // ---------------------------------------------------------------- sidebar
@@ -894,7 +896,7 @@ export component AppWindow inherits Window {
                     Card {
                         title: "FPS FROM MANGOHUD";
                         Text {
-                            text: "FPS, lows and stutters come from MangoHud, which must be enabled for the game (for example the Steam launch option: mangohud %command%). Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
+                            text: "FPS, lows and stutters come from MangoHud. Setting it up turns it on for every Vulkan game (including Proton games), with its overlay hidden (Shift_R+F12 shows it). OpenGL-only games still need the launch option mangohud %command%. Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
                             color: Theme.muted;
                             wrap: word-wrap;
                         }
@@ -1085,6 +1087,12 @@ export component AppWindow inherits Window {
                 Card {
                     title: "GENERAL";
                     Switch { text: "Start OpenCUE when I log in"; checked <=> root.autostart; toggled => { root.autostart-toggled(self.checked); } }
+                    Switch {
+                        text: "Keep the window minimized at login";
+                        enabled: root.autostart;
+                        checked <=> root.start-minimized;
+                        toggled => { root.start-minimized-toggled(self.checked); }
+                    }
                     Switch { text: "Show temperatures in Fahrenheit"; checked <=> root.fahrenheit; toggled => { root.settings-changed(); } }
                     Switch { text: "Hand devices back to hardware mode when OpenCUE stops"; checked <=> root.restore-hw; toggled => { root.settings-changed(); } }
                     Text {

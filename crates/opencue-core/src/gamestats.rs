@@ -4,6 +4,10 @@
 //! `log_interval=0` and `output_folder` pointing at [`log_dir`], it appends one row per frame
 //! to a CSV while the game runs; [`LogTracker`] follows the newest file and keeps a rolling
 //! window of frame times.
+//!
+//! Setup also sets `MANGOHUD=1` for the whole login session (see [`env_file`]) and adds
+//! `no_display`, so every Vulkan game logs without a per-game launch option and without
+//! drawing MangoHud's overlay (its toggle key still shows it).
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
@@ -63,12 +67,15 @@ pub enum MangoHudStatus {
     Ready,
 }
 
-pub fn mangohud_config() -> PathBuf {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
+fn config_home() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home().join(".config"));
-    config.join("MangoHud").join("MangoHud.conf")
+        .unwrap_or_else(|| home().join(".config"))
+}
+
+pub fn mangohud_config() -> PathBuf {
+    config_home().join("MangoHud").join("MangoHud.conf")
 }
 
 fn mangohud_installed() -> bool {
@@ -80,11 +87,22 @@ pub fn mangohud_status() -> MangoHudStatus {
     if !mangohud_installed() {
         return MangoHudStatus::NotInstalled;
     }
+    // An older block (or a missing env file) counts as not set up, so the app offers to update it.
     let text = fs::read_to_string(mangohud_config()).unwrap_or_default();
-    if text.contains(BLOCK_START) { MangoHudStatus::Ready } else { MangoHudStatus::NotSetUp }
+    let env = fs::read_to_string(env_file()).unwrap_or_default();
+    if text.contains(&block(&log_dir())) && env == ENV { MangoHudStatus::Ready } else { MangoHudStatus::NotSetUp }
 }
 
-/// Add (or refresh) OpenCUE's block at the end of the global MangoHud config.
+/// Sets `MANGOHUD=1` for every app started in the login session, from the next login.
+pub fn env_file() -> PathBuf {
+    config_home().join("environment.d").join("opencue-mangohud.conf")
+}
+
+const ENV: &str =
+    "# Written by OpenCUE: load MangoHud (hidden) into every Vulkan game, for the Nexus game stats.\nMANGOHUD=1\n";
+
+/// Add (or refresh) OpenCUE's block at the end of the global MangoHud config, and turn MangoHud on
+/// for the session.
 pub fn setup_mangohud() -> io::Result<PathBuf> {
     let path = mangohud_config();
     let text = fs::read_to_string(&path).unwrap_or_default();
@@ -101,12 +119,17 @@ pub fn setup_mangohud() -> io::Result<PathBuf> {
     let tmp = path.with_extension("conf.opencue-tmp");
     fs::write(&tmp, out)?;
     fs::rename(&tmp, &path)?;
+    let env = env_file();
+    if let Some(dir) = env.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(env, ENV)?;
     Ok(path)
 }
 
 fn block(dir: &Path) -> String {
     format!(
-        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\nautostart_log=1\nlog_interval=0\noutput_folder={}\n{BLOCK_END}\n",
+        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\n# The overlay stays hidden until its toggle key is pressed.\nno_display\nautostart_log=1\nlog_interval=0\noutput_folder={}\n{BLOCK_END}\n",
         dir.display()
     )
 }
@@ -284,7 +307,7 @@ fn newest_log(dir: &Path) -> Option<(PathBuf, Duration)> {
 /// Make sure the log folder exists (MangoHud won't create it, e.g. after the cache is cleared) and
 /// delete logs of games that closed a while ago; they grow by ~15 KB per second of play.
 pub fn maintain_log_dir() {
-    if mangohud_status() == MangoHudStatus::Ready {
+    if fs::read_to_string(mangohud_config()).is_ok_and(|t| t.contains(BLOCK_START)) {
         let _ = fs::create_dir_all(log_dir());
     }
     let Ok(entries) = fs::read_dir(log_dir()) else { return };
