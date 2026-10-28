@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use image::RgbaImage;
 use opencue_core::config::{
-    Action, ChannelCooling, Config, Effect, FanMode, LcdMode, Lighting, NexusButton, NexusMode, NexusPage, Preset,
-    Sensor, format_color, media_dir, parse_color,
+    Action, ChannelCooling, Config, Effect, FanMode, GameMetric, LcdMode, Lighting, NexusButton, NexusMode, NexusPage,
+    Preset, Sensor, format_color, media_dir, parse_color,
 };
 use opencue_core::cooling::curve;
+use opencue_core::gamestats::{self, MangoHudStatus};
 use opencue_core::ipc::{Client, Request, Response};
 use opencue_core::lighting::{self, hsv};
 use opencue_core::render::{self, fmt_temp, lcd::Frame};
@@ -493,6 +494,27 @@ fn action_hint(i: i32) -> &'static str {
     }
 }
 
+fn sync_game_stats(ui: &AppWindow, chosen: &[GameMetric]) {
+    let (a, b) = GameMetric::ALL.split_at(GameMetric::ALL.len().div_ceil(2));
+    let on =
+        |half: &[GameMetric]| ModelRc::new(VecModel::from(half.iter().map(|m| chosen.contains(m)).collect::<Vec<_>>()));
+    ui.set_game_metrics_a(strings(a.iter().map(|m| m.description())));
+    ui.set_game_metrics_b(strings(b.iter().map(|m| m.description())));
+    ui.set_game_metrics_a_on(on(a));
+    ui.set_game_metrics_b_on(on(b));
+    ui.set_game_metrics_count(ss(format!("{} OF {}", chosen.len(), GameMetric::MAX_SHOWN)));
+    let status = gamestats::mangohud_status();
+    ui.set_mangohud_status(ss(match status {
+        MangoHudStatus::Ready => "MangoHud is set up: games started with MangoHud send their FPS to the Nexus.".into(),
+        MangoHudStatus::NotSetUp => format!(
+            "MangoHud is installed but not set up. This adds 3 lines to {} so it logs frame times for OpenCUE.",
+            gamestats::mangohud_config().display()
+        ),
+        MangoHudStatus::NotInstalled => "MangoHud is not installed (sudo pacman -S mangohud lib32-mangohud).".into(),
+    }));
+    ui.set_mangohud_can_setup(status == MangoHudStatus::NotSetUp);
+}
+
 fn sync_nexus(ui: &AppWindow) {
     with_app(|app| {
         let nx = &app.cfg.nexus;
@@ -501,7 +523,9 @@ fn sync_nexus(ui: &AppWindow) {
             NexusMode::Sysinfo => 1,
             NexusMode::Clock => 2,
             NexusMode::Media => 3,
+            NexusMode::Gaming => 4,
         });
+        sync_game_stats(ui, &nx.game_metrics);
         ui.set_nexus_brightness(nx.brightness as f32);
         ui.set_nexus_pages(strings(
             nx.pages.iter().map(|p| if p.name.is_empty() { "Page".to_string() } else { p.name.clone() }),
@@ -1061,7 +1085,7 @@ fn main() -> anyhow::Result<()> {
     let w = ui.as_weak();
     ui.on_nexus_changed(move || {
         let ui = w.unwrap();
-        let modes = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock, NexusMode::Media];
+        let modes = [NexusMode::Buttons, NexusMode::Sysinfo, NexusMode::Clock, NexusMode::Media, NexusMode::Gaming];
         let mode = modes[ui.get_nexus_mode().clamp(0, modes.len() as i32 - 1) as usize];
         let brightness = ui.get_nexus_brightness().round().clamp(0.0, 100.0) as u8;
         edit(
@@ -1072,6 +1096,35 @@ fn main() -> anyhow::Result<()> {
             },
             sync_nexus,
         );
+    });
+    let w = ui.as_weak();
+    ui.on_game_metric_toggled(move |i, on| {
+        let ui = w.unwrap();
+        let Some(&metric) = GameMetric::ALL.get(i.max(0) as usize) else { return };
+        edit(
+            &ui,
+            |cfg| {
+                let chosen = &mut cfg.nexus.game_metrics;
+                if !on {
+                    chosen.retain(|m| *m != metric);
+                } else if !chosen.contains(&metric) && chosen.len() < GameMetric::MAX_SHOWN {
+                    chosen.push(metric);
+                    // Cells follow the list order in the app.
+                    chosen.sort_by_key(|m| GameMetric::ALL.iter().position(|a| a == m));
+                }
+            },
+            // Re-sync either way, so a 7th tick is undone.
+            sync_nexus,
+        );
+    });
+    let w = ui.as_weak();
+    ui.on_mangohud_setup(move || {
+        let ui = w.unwrap();
+        match gamestats::setup_mangohud() {
+            Ok(path) => log::info!("added OpenCUE's logging block to {}", path.display()),
+            Err(e) => log::error!("cannot set up MangoHud: {e}"),
+        }
+        sync_nexus(&ui);
     });
     let w = ui.as_weak();
     ui.on_nexus_page_selected(move |_| {

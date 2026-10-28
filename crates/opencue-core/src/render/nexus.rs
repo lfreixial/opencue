@@ -6,7 +6,7 @@ use image::RgbaImage;
 use image::imageops::FilterType;
 
 use super::{Fonts, blend, fill_rect, fmt_temp, fonts, local_time, solid};
-use crate::config::{NexusConfig, NexusMode, parse_color};
+use crate::config::{GameMetric, NexusConfig, NexusMode, parse_color};
 use crate::devices::nexus::{HEIGHT, WIDTH};
 use crate::telemetry::{NowPlaying, Telemetry};
 
@@ -118,6 +118,7 @@ pub fn render(cfg: &NexusConfig, page: usize, pressed: Option<usize>, t: &Teleme
             f.draw_centered(&mut img, &text, 28.0, WIDTH as f32 / 2.0, h / 2.0, [240, 240, 245]);
         }
         NexusMode::Media => media(&mut img, f, t.now_playing.as_ref(), pressed),
+        NexusMode::Gaming => gaming(&mut img, f, &cfg.game_metrics, t, fahrenheit),
     }
     img
 }
@@ -211,6 +212,69 @@ fn media(img: &mut RgbaImage, f: &Fonts, np: Option<&NowPlaying>, pressed: Optio
             }
             _ => triangle(img, [(cx - 5.0, cy - 8.0), (cx - 5.0, cy + 8.0), (cx + 8.0, cy)], icon),
         }
+    }
+}
+
+const AMBER: [u8; 3] = [255, 176, 0];
+const RED: [u8; 3] = [255, 77, 94];
+
+fn gaming(img: &mut RgbaImage, f: &Fonts, metrics: &[GameMetric], t: &Telemetry, fahrenheit: bool) {
+    let metrics = &metrics[..metrics.len().min(GameMetric::MAX_SHOWN)];
+    if metrics.is_empty() {
+        f.draw_centered(img, "Pick stats to show in OpenCUE", 15.0, WIDTH as f32 / 2.0, HEIGHT as f32 / 2.0, DIM);
+        return;
+    }
+    let w = WIDTH as f32 / metrics.len() as f32;
+    for (i, &m) in metrics.iter().enumerate() {
+        let cx = w * i as f32 + w / 2.0;
+        if i > 0 {
+            fill_rect(img, (w * i as f32) as i32, 8, 1, HEIGHT as i32 - 16, [40, 40, 52]);
+        }
+        let (value, color) = game_value(m, t, fahrenheit);
+        f.draw_centered(img, m.label(), 11.0, cx, 11.0, ACCENT);
+        let size = f.fit_size(&value, 22.0, w - 10.0);
+        f.draw_centered(img, &value, size, cx, 31.0, color);
+    }
+}
+
+/// The text for one cell, and its colour (dim when there is nothing to show).
+fn game_value(m: GameMetric, t: &Telemetry, fahrenheit: bool) -> (String, [u8; 3]) {
+    let s = &t.system;
+    let temp = |v: Option<f32>, warn: f32, hot: f32| match v {
+        None => ("--".to_string(), DIM),
+        Some(c) => (
+            fmt_temp(Some(c), fahrenheit),
+            if c >= hot {
+                RED
+            } else if c >= warn {
+                AMBER
+            } else {
+                TEXT
+            },
+        ),
+    };
+    let num = |v: Option<f32>, fmt: &dyn Fn(f32) -> String| v.map_or(("--".into(), DIM), |v| (fmt(v), TEXT));
+    let game = t.game.as_ref();
+    match m {
+        GameMetric::Fps => num(game.map(|g| g.fps), &|v| format!("{v:.0}")),
+        GameMetric::FrameTime => num(game.map(|g| g.frametime_ms), &|v| format!("{v:.1} ms")),
+        GameMetric::Low1 => num(game.map(|g| g.low1), &|v| format!("{v:.0}")),
+        GameMetric::Low01 => num(game.map(|g| g.low01), &|v| format!("{v:.0}")),
+        GameMetric::P99FrameTime => num(game.map(|g| g.p99_ms), &|v| format!("{v:.1} ms")),
+        GameMetric::Stutters => match game {
+            None => ("--".into(), DIM),
+            Some(g) => (g.stutters.to_string(), if g.stutters > 0 { AMBER } else { TEXT }),
+        },
+        GameMetric::GpuTemp => temp(s.gpu_temp, 85.0, 95.0),
+        GameMetric::GpuHotspot => temp(s.gpu_hotspot, 95.0, 105.0),
+        GameMetric::GpuMemTemp => temp(s.gpu_mem_temp, 90.0, 100.0),
+        GameMetric::CpuTemp => temp(s.cpu_temp, 85.0, 95.0),
+        GameMetric::LiquidTemp => temp(t.liquid_temp, 40.0, 50.0),
+        GameMetric::GpuLoad => num(s.gpu_load, &|v| format!("{v:.0}%")),
+        GameMetric::CpuLoad => num(s.cpu_load, &|v| format!("{v:.0}%")),
+        GameMetric::GpuPower => num(s.gpu_power, &|v| format!("{v:.0} W")),
+        GameMetric::GpuClock => num(s.gpu_clock, &|v| format!("{v:.0} MHz")),
+        GameMetric::Vram => num(s.vram_used, &|v| format!("{v:.1} GB")),
     }
 }
 
@@ -334,6 +398,21 @@ mod tests {
             let t = Telemetry { now_playing: Some(np), ..Default::default() };
             render(&cfg, 0, None, &t, false);
         }
+    }
+
+    #[test]
+    fn game_stats_render_with_and_without_a_game() {
+        let cfg = NexusConfig { mode: NexusMode::Gaming, game_metrics: GameMetric::ALL.to_vec(), ..Default::default() };
+        let mut t = Telemetry::default();
+        render(&cfg, 0, None, &t, false);
+        t.game = Some(crate::gamestats::GameStats { fps: 143.7, low1: 97.2, stutters: 3, ..Default::default() });
+        t.system.gpu_hotspot = Some(101.0);
+        render(&cfg, 0, None, &t, true);
+        assert_eq!(game_value(GameMetric::Fps, &t, false).0, "144");
+        assert_eq!(game_value(GameMetric::GpuHotspot, &t, false).1, AMBER);
+        assert_eq!(game_value(GameMetric::CpuTemp, &t, false), ("--".into(), DIM));
+        let empty = NexusConfig { game_metrics: vec![], ..cfg };
+        render(&empty, 0, None, &t, false);
     }
 
     #[test]

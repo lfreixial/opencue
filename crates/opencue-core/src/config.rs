@@ -306,6 +306,110 @@ pub enum NexusMode {
     Clock,
     /// Now playing from the active media player, with transport controls.
     Media,
+    /// FPS, frame-time lows and hardware stats while gaming.
+    Gaming,
+}
+
+/// One cell of the Nexus game stats screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameMetric {
+    Fps,
+    FrameTime,
+    Low1,
+    Low01,
+    P99FrameTime,
+    Stutters,
+    GpuTemp,
+    GpuHotspot,
+    GpuMemTemp,
+    GpuLoad,
+    GpuPower,
+    GpuClock,
+    Vram,
+    CpuTemp,
+    CpuLoad,
+    LiquidTemp,
+}
+
+impl GameMetric {
+    pub const ALL: [GameMetric; 16] = [
+        GameMetric::Fps,
+        GameMetric::FrameTime,
+        GameMetric::Low1,
+        GameMetric::Low01,
+        GameMetric::P99FrameTime,
+        GameMetric::Stutters,
+        GameMetric::GpuTemp,
+        GameMetric::GpuHotspot,
+        GameMetric::GpuMemTemp,
+        GameMetric::GpuLoad,
+        GameMetric::GpuPower,
+        GameMetric::GpuClock,
+        GameMetric::Vram,
+        GameMetric::CpuTemp,
+        GameMetric::CpuLoad,
+        GameMetric::LiquidTemp,
+    ];
+    /// The strip fits this many cells legibly.
+    pub const MAX_SHOWN: usize = 6;
+
+    /// Short label drawn on the strip.
+    pub fn label(self) -> &'static str {
+        match self {
+            GameMetric::Fps => "FPS",
+            GameMetric::FrameTime => "FRAME",
+            GameMetric::Low1 => "1% LOW",
+            GameMetric::Low01 => "0.1% LOW",
+            GameMetric::P99FrameTime => "99TH %",
+            GameMetric::Stutters => "STUTTERS",
+            GameMetric::GpuTemp => "GPU",
+            GameMetric::GpuHotspot => "HOTSPOT",
+            GameMetric::GpuMemTemp => "VRAM TEMP",
+            GameMetric::GpuLoad => "GPU LOAD",
+            GameMetric::GpuPower => "GPU POWER",
+            GameMetric::GpuClock => "GPU CLOCK",
+            GameMetric::Vram => "VRAM",
+            GameMetric::CpuTemp => "CPU",
+            GameMetric::CpuLoad => "CPU LOAD",
+            GameMetric::LiquidTemp => "LIQUID",
+        }
+    }
+
+    /// Longer name for the app's settings.
+    pub fn description(self) -> &'static str {
+        match self {
+            GameMetric::Fps => "FPS",
+            GameMetric::FrameTime => "Frame time (ms)",
+            GameMetric::Low1 => "1% low FPS",
+            GameMetric::Low01 => "0.1% low FPS",
+            GameMetric::P99FrameTime => "99th percentile frame time",
+            GameMetric::Stutters => "Stutters (last 30 s)",
+            GameMetric::GpuTemp => "GPU temperature",
+            GameMetric::GpuHotspot => "GPU hotspot temperature",
+            GameMetric::GpuMemTemp => "GPU memory temperature",
+            GameMetric::GpuLoad => "GPU load",
+            GameMetric::GpuPower => "GPU power",
+            GameMetric::GpuClock => "GPU clock",
+            GameMetric::Vram => "VRAM used",
+            GameMetric::CpuTemp => "CPU temperature",
+            GameMetric::CpuLoad => "CPU load",
+            GameMetric::LiquidTemp => "Liquid temperature",
+        }
+    }
+
+    /// Needs a game running with MangoHud.
+    pub fn needs_game(self) -> bool {
+        matches!(
+            self,
+            GameMetric::Fps
+                | GameMetric::FrameTime
+                | GameMetric::Low1
+                | GameMetric::Low01
+                | GameMetric::P99FrameTime
+                | GameMetric::Stutters
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -314,6 +418,8 @@ pub struct NexusConfig {
     pub mode: NexusMode,
     pub brightness: u8,
     pub pages: Vec<NexusPage>,
+    /// Cells of the game stats screen, left to right.
+    pub game_metrics: Vec<GameMetric>,
 }
 
 fn button(label: &str, action: Action) -> NexusButton {
@@ -331,6 +437,14 @@ impl Default for NexusConfig {
         Self {
             mode: NexusMode::Buttons,
             brightness: 100,
+            game_metrics: vec![
+                GameMetric::Fps,
+                GameMetric::Low1,
+                GameMetric::Stutters,
+                GameMetric::GpuTemp,
+                GameMetric::GpuHotspot,
+                GameMetric::CpuTemp,
+            ],
             pages: vec![
                 NexusPage {
                     name: "Media".into(),

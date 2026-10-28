@@ -17,6 +17,9 @@ the Elite LCD pump screen (including GIFs) and iCUE NEXUS touch shortcuts.
   text, switch profiles or change the LCD screen. Also system-info, clock and **now playing** modes: the
   current track from Spotify or any other MPRIS player (browsers, VLC, mpv, ...) with cover art, a progress
   bar and touch controls. Music players are preferred over videos; tap the track info to switch players.
+- **Game stats on the Nexus**: pick up to 6 of FPS, frame time, 1% and 0.1% lows, 99th percentile frame time,
+  stutters, GPU temperature / hotspot / memory temperature, GPU load / power / clock, VRAM, CPU temperature and
+  load, and liquid temperature. FPS comes from MangoHud (one click in the app sets it up).
 - **Profiles** you can switch from the app, the CLI or a Nexus button.
 - **Safety first**: every fan and the pump go to 100% above a critical liquid or CPU temperature, and any
   fan whose sensor stops reporting does the same. The pump never drops below 50%. When OpenCUE stops, the
@@ -85,6 +88,12 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
 - **Now playing shows nothing**: the player has to support MPRIS. Spotify, browsers, VLC and most music
   players do; mpv needs the `mpv-mpris` plugin (`sudo pacman -S mpv-mpris`). Cover art from the web is
   downloaded with `curl`, and local videos without art get a thumbnail made with `ffmpeg`.
+- **Game stats show `--` for FPS**: the game has to run with MangoHud (for Steam, the launch option
+  `mangohud %command%`), and MangoHud has to be set up from the Nexus page (Game stats, Set up MangoHud). That
+  adds `autostart_log=1`, `log_interval=0` and `output_folder` to `~/.config/MangoHud/MangoHud.conf`, so MangoHud
+  logs every frame to `~/.cache/opencue/mangohud/` (about 15 KB per second of play; OpenCUE deletes each log a
+  couple of minutes after the game closes). A per-game MangoHud config replaces the global one, so add the same
+  three lines there too.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 

@@ -49,6 +49,9 @@ pub struct Telemetry {
     /// What the chosen media player is playing (only tracked while the Nexus shows it).
     #[serde(default)]
     pub now_playing: Option<NowPlaying>,
+    /// FPS and lows of the running game (only tracked while the Nexus shows game stats).
+    #[serde(default)]
+    pub game: Option<crate::gamestats::GameStats>,
 }
 
 /// A snapshot of an MPRIS media player.
