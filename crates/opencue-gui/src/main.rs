@@ -533,7 +533,7 @@ fn sync_game_stats(ui: &AppWindow, chosen: &[GameMetric]) {
         MangoHudStatus::Ready if std::env::var_os("MANGOHUD").is_none() => {
             "MangoHud is set up. Log out and back in to turn it on for every game.".into()
         }
-        MangoHudStatus::Ready => "MangoHud is on for every Vulkan game, with its overlay invisible.".into(),
+        MangoHudStatus::Ready => "MangoHud is on for every Vulkan game.".into(),
         MangoHudStatus::NotSetUp => format!(
             "MangoHud is installed but not set up for OpenCUE. This adds a few lines to {} and sets MANGOHUD=1 in {}.",
             gamestats::mangohud_config().display(),
@@ -542,6 +542,10 @@ fn sync_game_stats(ui: &AppWindow, chosen: &[GameMetric]) {
         MangoHudStatus::NotInstalled => "MangoHud is not installed (sudo pacman -S mangohud lib32-mangohud).".into(),
     }));
     ui.set_mangohud_can_setup(status == MangoHudStatus::NotSetUp);
+    ui.set_mangohud_ready(status == MangoHudStatus::Ready);
+    ui.set_mangohud_overlay(gamestats::overlay_visible());
+    // The full path: shortcuts don't search ~/.local/bin.
+    ui.set_overlay_command(ss(format!("{} overlay toggle", daemon_exe().display())));
 }
 
 fn sync_nexus(ui: &AppWindow) {
@@ -1267,6 +1271,13 @@ fn main() -> anyhow::Result<()> {
             // Re-sync either way, so a 7th tick is undone.
             sync_nexus,
         );
+    });
+    let w = ui.as_weak();
+    ui.on_mangohud_overlay_toggled(move |visible| {
+        if let Err(e) = gamestats::set_overlay_visible(visible) {
+            log::error!("cannot change the MangoHud overlay: {e}");
+        }
+        sync_nexus(&w.unwrap());
     });
     let w = ui.as_weak();
     ui.on_mangohud_setup(move || {

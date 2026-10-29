@@ -10,11 +10,11 @@
 //! option and without anything drawn over it. (`no_display` would hide it too, but MangoHud then
 //! stops logging.)
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -91,7 +91,7 @@ pub fn mangohud_status() -> MangoHudStatus {
     // An older block (or a missing env file) counts as not set up, so the app offers to update it.
     let text = fs::read_to_string(mangohud_config()).unwrap_or_default();
     let env = fs::read_to_string(env_file()).unwrap_or_default();
-    if text.contains(&block(&log_dir())) && env == ENV { MangoHudStatus::Ready } else { MangoHudStatus::NotSetUp }
+    if current_block(&text) && env == ENV { MangoHudStatus::Ready } else { MangoHudStatus::NotSetUp }
 }
 
 /// Sets `MANGOHUD=1` for every app started in the login session, from the next login.
@@ -111,7 +111,8 @@ pub fn setup_mangohud() -> io::Result<PathBuf> {
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&block(&log_dir()));
+    // Keeps the overlay as it was (hidden for a new setup).
+    out.push_str(&block(&log_dir(), overlay_visible()));
     // MangoHud does not create its output folder; without it, it silently logs nothing.
     fs::create_dir_all(log_dir())?;
     if let Some(dir) = path.parent() {
@@ -128,11 +129,56 @@ pub fn setup_mangohud() -> io::Result<PathBuf> {
     Ok(path)
 }
 
-fn block(dir: &Path) -> String {
+const HIDDEN: &str =
+    "# Hidden by making it transparent: no_display would also stop the logging.\nalpha=0\nbackground_alpha=0\n";
+
+fn block(dir: &Path, visible: bool) -> String {
     format!(
-        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\n# The overlay is transparent: no_display would also stop the logging.\nalpha=0\nbackground_alpha=0\nautostart_log=1\nlog_interval=0\nlog_duration=0\noutput_folder={}\n{BLOCK_END}\n",
+        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\n{}# MangoHud's own toggle sets no_display, which stops the logging; `opencue overlay` toggles instead.\ntoggle_hud=\nautostart_log=1\nlog_interval=0\nlog_duration=0\noutput_folder={}\n{BLOCK_END}\n",
+        if visible { "" } else { HIDDEN },
         dir.display()
     )
+}
+
+/// Whether OpenCUE's block leaves MangoHud's overlay visible (it's hidden unless asked for).
+pub fn overlay_visible() -> bool {
+    block_shows_overlay(&fs::read_to_string(mangohud_config()).unwrap_or_default())
+}
+
+/// Reads the settings, not the exact text, so blocks from older versions count too (those hid it
+/// with `no_display`).
+fn block_shows_overlay(text: &str) -> bool {
+    let mut inside = false;
+    let mut found = false;
+    for line in text.lines() {
+        match line.trim() {
+            l if l == BLOCK_START => (inside, found) = (true, true),
+            l if l == BLOCK_END => inside = false,
+            "alpha=0" | "no_display" | "no_display=1" if inside => return false,
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Show or hide MangoHud's overlay. Running games reload the config within a moment: MangoHud
+/// starts a new log, which [`LogTracker`] carries on from.
+pub fn set_overlay_visible(visible: bool) -> io::Result<()> {
+    let path = mangohud_config();
+    let text = fs::read_to_string(&path)?;
+    if !text.contains(BLOCK_START) {
+        return Err(io::Error::other("MangoHud is not set up for OpenCUE yet"));
+    }
+    let mut out = without_block(&text);
+    out.push_str(&block(&log_dir(), visible));
+    let tmp = path.with_extension("conf.opencue-tmp");
+    fs::write(&tmp, out)?;
+    fs::rename(&tmp, &path)
+}
+
+fn current_block(text: &str) -> bool {
+    let dir = log_dir();
+    text.contains(&block(&dir, false)) || text.contains(&block(&dir, true))
 }
 
 fn without_block(text: &str) -> String {
@@ -171,8 +217,11 @@ pub struct LogTracker {
     /// Joined mid-file: the first line read is the tail of a row.
     skip_line: bool,
     frames: VecDeque<Frame>,
+    /// Added to the new log's times when carrying on from the game's previous log.
+    offset_ns: u64,
     /// Size of each active log at the last poll, to tell which one is the game.
     sizes: HashMap<PathBuf, u64>,
+    last_poll: Option<Instant>,
 }
 
 impl LogTracker {
@@ -183,17 +232,28 @@ impl LogTracker {
     /// Read whatever the game has logged since the last call. `None` when no game is running.
     pub fn poll(&mut self) -> Option<GameStats> {
         let logs = active_logs(&log_dir());
-        let chosen = busiest(&logs, &self.sizes);
+        let secs = self.last_poll.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        self.last_poll = Some(Instant::now());
+        let games = if logs.is_empty() { HashSet::new() } else { game_processes() };
+        let chosen = choose_log(&logs, &self.sizes, secs, |name| is_game(&games, name));
         self.sizes = logs.into_iter().collect();
         let Some(chosen) = chosen else {
             self.reset();
             return None;
         };
         if self.path.as_ref() != Some(&chosen) {
+            // MangoHud starts a new log when its config is reloaded (e.g. `opencue overlay`): carry
+            // on from the old one instead of starting the lows and stutters from scratch.
+            let same_game = self.path.as_deref().map(game_name) == Some(game_name(&chosen));
+            let frames = std::mem::take(&mut self.frames);
             self.reset();
             if let Err(e) = self.open(&chosen) {
                 log::debug!("cannot read {}: {e}", chosen.display());
                 return None;
+            }
+            if same_game {
+                self.offset_ns = frames.back().map_or(0, |f| f.at_ns);
+                self.frames = frames;
             }
         }
         if let Err(e) = self.read_new() {
@@ -207,7 +267,7 @@ impl LogTracker {
 
     /// Forget the log being followed (but not the sizes).
     fn reset(&mut self) {
-        *self = Self { sizes: std::mem::take(&mut self.sizes), ..Self::default() };
+        *self = Self { sizes: std::mem::take(&mut self.sizes), last_poll: self.last_poll, ..Self::default() };
     }
 
     fn open(&mut self, path: &Path) -> io::Result<()> {
@@ -243,7 +303,7 @@ impl LogTracker {
         let complete = self.partial.rfind('\n').map_or(0, |i| i + 1);
         for line in self.partial[..complete].lines() {
             if let Some(frame) = parse_row(line, ft, at) {
-                self.frames.push_back(frame);
+                self.frames.push_back(Frame { at_ns: frame.at_ns + self.offset_ns, ..frame });
             }
         }
         self.partial.drain(..complete);
@@ -315,12 +375,68 @@ fn active_logs(dir: &Path) -> Vec<(PathBuf, u64)> {
         .collect()
 }
 
-/// The log that grew most since the last poll. Every Vulkan app loads MangoHud, so a terminal or
-/// browser logs too, but only when it redraws; a game logs every frame.
-fn busiest(logs: &[(PathBuf, u64)], before: &HashMap<PathBuf, u64>) -> Option<PathBuf> {
-    logs.iter()
-        .max_by_key(|(path, size)| size.saturating_sub(before.get(path).copied().unwrap_or(0)))
-        .map(|(path, _)| path.clone())
+/// Logs written slower than this (about 20 FPS of 88-byte rows) only count if a launcher started them.
+const MIN_BYTES_PER_SEC: f64 = 20.0 * 88.0;
+
+/// Which log is the game's. Every Vulkan app loads MangoHud, so a terminal or browser logs too
+/// whenever it redraws. Logs of processes a game launcher started come first; otherwise only one
+/// written at a game-like frame rate counts. Among those, the one that grew most since `secs` ago.
+fn choose_log(
+    logs: &[(PathBuf, u64)],
+    before: &HashMap<PathBuf, u64>,
+    secs: f64,
+    is_game: impl Fn(&str) -> bool,
+) -> Option<PathBuf> {
+    let growth = |(path, size): &&(PathBuf, u64)| size.saturating_sub(before.get(path).copied().unwrap_or(0));
+    let busiest = |logs: Vec<&(PathBuf, u64)>| logs.into_iter().max_by_key(growth).map(|(path, _)| path.clone());
+    let games: Vec<_> = logs.iter().filter(|(path, _)| is_game(&game_name(path))).collect();
+    if !games.is_empty() {
+        return busiest(games);
+    }
+    let fast = |log: &&(PathBuf, u64)| {
+        before.contains_key(&log.0) && secs > 0.0 && growth(log) as f64 >= MIN_BYTES_PER_SEC * secs
+    };
+    busiest(logs.iter().filter(fast).collect())
+}
+
+/// Environment variables that game launchers set: Steam, Proton and Wine (so also Heroic and
+/// Bottles), and Lutris.
+const LAUNCHER_VARS: [&[u8]; 6] = [
+    b"SteamAppId=",
+    b"SteamGameId=",
+    b"STEAM_COMPAT_APP_ID=",
+    b"STEAM_COMPAT_DATA_PATH=",
+    b"WINEPREFIX=",
+    b"LUTRIS_GAME_UUID=",
+];
+
+/// Names of running processes a game launcher started: their `comm` (cut to 15 characters by the
+/// kernel) and the file name they were started as (Wine uses Windows paths).
+fn game_processes() -> HashSet<String> {
+    let mut names = HashSet::new();
+    let Ok(procs) = fs::read_dir("/proc") else { return names };
+    for p in procs.flatten() {
+        let dir = p.path();
+        let Ok(env) = fs::read(dir.join("environ")) else { continue };
+        if !env.split(|&b| b == 0).any(|var| LAUNCHER_VARS.iter().any(|m| var.starts_with(m))) {
+            continue;
+        }
+        if let Ok(comm) = fs::read_to_string(dir.join("comm")) {
+            names.insert(comm.trim_end().to_string());
+        }
+        if let Ok(cmdline) = fs::read(dir.join("cmdline")) {
+            let argv0 = String::from_utf8_lossy(cmdline.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
+            if let Some(file) = argv0.rsplit(['/', '\\']).next().filter(|f| !f.is_empty()) {
+                names.insert(file.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// MangoHud names logs after the program; `comm` holds only its first 15 characters.
+fn is_game(games: &HashSet<String>, name: &str) -> bool {
+    games.contains(name) || games.contains(&name.chars().take(15).collect::<String>())
 }
 
 /// Make sure the log folder exists (MangoHud won't create it, e.g. after the cache is cleared) and
@@ -329,7 +445,7 @@ pub fn maintain_log_dir() {
     let text = fs::read_to_string(mangohud_config()).unwrap_or_default();
     if text.contains(BLOCK_START) {
         // Set up by an older OpenCUE: bring the block up to date, since the user already chose it.
-        if !text.contains(&block(&log_dir())) {
+        if !current_block(&text) {
             match setup_mangohud() {
                 Ok(path) => log::info!("updated OpenCUE's block in {}", path.display()),
                 Err(e) => log::warn!("cannot update {}: {e}", mangohud_config().display()),
@@ -408,22 +524,57 @@ mod tests {
     }
 
     #[test]
-    fn follows_the_log_that_grows_fastest() {
-        let (game, term) = (PathBuf::from("/l/game.exe_x_y.csv"), PathBuf::from("/l/vibeterm_x_y.csv"));
+    fn picks_the_game_not_the_terminal() {
+        let (game, term) = (
+            PathBuf::from("/l/game.exe_2026-10-29_13-37-43.csv"),
+            PathBuf::from("/l/vibeterm_2026-10-29_13-37-49.csv"),
+        );
         let before = HashMap::from([(game.clone(), 50_000), (term.clone(), 90_000)]);
-        // The terminal's log is bigger, but the game's grew more since the last poll.
+        let launched = |name: &str| name == "game.exe";
+        let nothing = |_: &str| false;
+        // Started by a launcher: chosen even while it isn't growing (MangoHud reloading its config).
+        let now = [(game.clone(), 50_000), (term.clone(), 91_000)];
+        assert_eq!(choose_log(&now, &before, 0.5, launched), Some(game.clone()));
+        // Unknown programs: only one rendering at a game-like rate, and the faster one.
         let now = [(game.clone(), 58_000), (term.clone(), 90_400)];
-        assert_eq!(busiest(&now, &before), Some(game));
-        assert_eq!(busiest(&[], &before), None);
+        assert_eq!(choose_log(&now, &before, 0.5, nothing), Some(game.clone()));
+        let now = [(term.clone(), 90_400)];
+        assert_eq!(choose_log(&now, &before, 0.5, nothing), None);
+        // A log seen for the first time has no rate yet.
+        assert_eq!(choose_log(&[(PathBuf::from("/l/new_x_y.csv"), 9_000)], &before, 0.5, nothing), None);
+        assert_eq!(choose_log(&[], &before, 0.5, launched), None);
+    }
+
+    #[test]
+    fn matches_cut_down_process_names() {
+        let games = HashSet::from(["Cyberpunk2077.e".to_string(), "Balatro.exe".to_string()]);
+        assert!(is_game(&games, "Cyberpunk2077.exe"));
+        assert!(is_game(&games, "Balatro.exe"));
+        assert!(!is_game(&games, "vibeterm"));
     }
 
     #[test]
     fn config_block_is_replaced_not_duplicated() {
         let user = "fps_limit=144\n";
-        let once = format!("{}{}", without_block(user), block(Path::new("/c/opencue/mangohud")));
-        let twice = format!("{}{}", without_block(&once), block(Path::new("/c/opencue/mangohud")));
-        assert_eq!(once, twice);
+        let once = format!("{}{}", without_block(user), block(Path::new("/c/opencue/mangohud"), false));
+        let twice = format!("{}{}", without_block(&once), block(Path::new("/c/opencue/mangohud"), true));
+        assert_ne!(once, twice);
+        assert!(once.contains(HIDDEN) && !twice.contains(HIDDEN));
+        assert!(current_block(&once.replace("/c/opencue/mangohud", &log_dir().display().to_string())));
         assert!(once.starts_with("fps_limit=144\n"));
         assert_eq!(without_block(&once), user);
+        assert_eq!(without_block(&twice), user);
+    }
+
+    #[test]
+    fn overlay_state_is_read_from_the_settings() {
+        assert!(!block_shows_overlay(&block(Path::new("/x"), false)));
+        assert!(block_shows_overlay(&block(Path::new("/x"), true)));
+        let older = format!("{BLOCK_START}\n# The overlay is transparent.\nalpha=0\nbackground_alpha=0\n{BLOCK_END}\n");
+        let oldest = format!("{BLOCK_START}\nno_display\nautostart_log=1\n{BLOCK_END}\n");
+        assert!(!block_shows_overlay(&older) && !block_shows_overlay(&oldest));
+        // The user's own settings outside the block don't count.
+        assert!(block_shows_overlay(&format!("alpha=0\n{}", block(Path::new("/x"), true))));
+        assert!(!block_shows_overlay("alpha=1\n"));
     }
 }

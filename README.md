@@ -102,6 +102,10 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
   `~/.cache/opencue/mangohud/` (about 15 KB per second of play; OpenCUE deletes each log a couple of minutes after
   the game closes). OpenGL-only games still need the launch option `mangohud %command%`. A per-game MangoHud
   config replaces the global one, so add the same lines there too.
+- **Showing MangoHud's overlay in a game**: MangoHud's own toggle key would stop the logging, so OpenCUE
+  unbinds it. Use the switch in Game stats, or `opencue overlay toggle` (`show`, `hide`); running games pick
+  it up within a second. For a key combo, add a command shortcut in System Settings (Keyboard, Shortcuts, Add
+  New, Command) that runs `~/.local/bin/opencue overlay toggle`, written out as the full path.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 

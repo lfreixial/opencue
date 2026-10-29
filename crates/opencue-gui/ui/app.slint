@@ -422,6 +422,10 @@ export component AppWindow inherits Window {
     in property <string> game-metrics-count;
     in property <string> mangohud-status;
     in property <bool> mangohud-can-setup;
+    in property <bool> mangohud-ready;
+    in-out property <bool> mangohud-overlay;
+    in property <string> overlay-command;
+    callback mangohud-overlay-toggled(bool);
     callback game-metric-toggled(int, bool);
     callback mangohud-setup();
     // discord
@@ -910,6 +914,16 @@ export component AppWindow inherits Window {
                             wrap: word-wrap;
                         }
                         Text { text: root.mangohud-status; color: Theme.text; wrap: word-wrap; }
+                        if root.mangohud-ready: Switch {
+                            text: "Show MangoHud's overlay in games";
+                            checked <=> root.mangohud-overlay;
+                            toggled => { root.mangohud-overlay-toggled(self.checked); }
+                        }
+                        if root.mangohud-ready: Text {
+                            text: "Running games pick this up within a second. For a key combo, add a shortcut in System Settings (Keyboard, Shortcuts, Add New, Command) that runs: " + root.overlay-command;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
                         if root.mangohud-can-setup: HorizontalLayout {
                             alignment: start;
                             Button { text: "Set up MangoHud"; clicked => { root.mangohud-setup(); } }
