@@ -22,6 +22,8 @@ USAGE:
     opencue profile [NAME]    list profiles, or switch to NAME
     opencue rescan            look for newly connected devices now
     opencue discord ACTION    mute, deafen, camera, screenshare or leave (e.g. for a keyboard shortcut)
+    opencue overlay [toggle|show|hide]
+                              show or hide MangoHud's overlay in running games (e.g. for a keyboard shortcut)
 ";
 
 fn client() -> Result<Client> {
@@ -127,6 +129,17 @@ fn main() -> Result<()> {
                 Response::Error(e) => bail!(e),
                 _ => Ok(()),
             }
+        }
+        Some("overlay") => {
+            let visible = match args.next().as_deref() {
+                Some("show") => true,
+                Some("hide") => false,
+                Some("toggle") | None => !opencue_core::gamestats::overlay_visible(),
+                _ => bail!("usage: opencue overlay [toggle|show|hide]"),
+            };
+            opencue_core::gamestats::set_overlay_visible(visible).context("cannot change the MangoHud config")?;
+            println!("MangoHud overlay {}", if visible { "shown" } else { "hidden" });
+            Ok(())
         }
         Some("gui") => {
             let exe = std::env::current_exe()?.with_file_name("opencue-gui");

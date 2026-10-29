@@ -422,6 +422,10 @@ export component AppWindow inherits Window {
     in property <string> game-metrics-count;
     in property <string> mangohud-status;
     in property <bool> mangohud-can-setup;
+    in property <bool> mangohud-ready;
+    in-out property <bool> mangohud-overlay;
+    in property <string> overlay-command;
+    callback mangohud-overlay-toggled(bool);
     callback game-metric-toggled(int, bool);
     callback mangohud-setup();
     // discord
@@ -905,11 +909,21 @@ export component AppWindow inherits Window {
                     Card {
                         title: "FPS FROM MANGOHUD";
                         Text {
-                            text: "FPS, lows and stutters come from MangoHud. Setting it up turns it on for every Vulkan game (including Proton games), with its overlay hidden (Shift_R+F12 shows it). OpenGL-only games still need the launch option mangohud %command%. Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
+                            text: "FPS, lows and stutters come from MangoHud. Setting it up turns it on for every Vulkan game (including Proton games), with its overlay made invisible. OpenGL-only games still need the launch option mangohud %command%. Lows and stutters cover the last 30 seconds. Temperatures, load, power and VRAM work without it.";
                             color: Theme.muted;
                             wrap: word-wrap;
                         }
                         Text { text: root.mangohud-status; color: Theme.text; wrap: word-wrap; }
+                        if root.mangohud-ready: Switch {
+                            text: "Show MangoHud's overlay in games";
+                            checked <=> root.mangohud-overlay;
+                            toggled => { root.mangohud-overlay-toggled(self.checked); }
+                        }
+                        if root.mangohud-ready: Text {
+                            text: "Running games pick this up within a second. For a key combo, add a shortcut in System Settings (Keyboard, Shortcuts, Add New, Command) that runs: " + root.overlay-command;
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                        }
                         if root.mangohud-can-setup: HorizontalLayout {
                             alignment: start;
                             Button { text: "Set up MangoHud"; clicked => { root.mangohud-setup(); } }

@@ -95,12 +95,17 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
   downloaded with `curl`, and local videos without art get a thumbnail made with `ffmpeg`.
 - **Game stats show `--` for FPS**: MangoHud has to be set up from the Nexus page (Game stats, Set up MangoHud),
   then log out and back in. That sets `MANGOHUD=1` in `~/.config/environment.d/opencue-mangohud.conf`, so every
-  Vulkan game (including everything running through Proton) loads MangoHud, and adds `no_display`,
-  `autostart_log=1`, `log_interval=0` and `output_folder` to `~/.config/MangoHud/MangoHud.conf`. The overlay stays
-  hidden (MangoHud's toggle key, Shift_R+F12 by default, shows it) while it logs every frame to
+  Vulkan game (including everything running through Proton) loads MangoHud, and adds `alpha=0`,
+  `background_alpha=0`, `autostart_log=1`, `log_interval=0`, `log_duration=0` and `output_folder` to
+  `~/.config/MangoHud/MangoHud.conf`. The overlay is fully transparent (MangoHud's `no_display` would hide it
+  too, but then it stops logging) while it logs every frame to
   `~/.cache/opencue/mangohud/` (about 15 KB per second of play; OpenCUE deletes each log a couple of minutes after
   the game closes). OpenGL-only games still need the launch option `mangohud %command%`. A per-game MangoHud
   config replaces the global one, so add the same lines there too.
+- **Showing MangoHud's overlay in a game**: MangoHud's own toggle key would stop the logging, so OpenCUE
+  unbinds it. Use the switch in Game stats, or `opencue overlay toggle` (`show`, `hide`); running games pick
+  it up within a second. For a key combo, add a command shortcut in System Settings (Keyboard, Shortcuts, Add
+  New, Command) that runs `~/.local/bin/opencue overlay toggle`, written out as the full path.
 - **iCUE in a Windows VM, or another tool such as liquidctl or OpenLinkHub, is also controlling the
   devices**: only one program should talk to them at a time.
 
