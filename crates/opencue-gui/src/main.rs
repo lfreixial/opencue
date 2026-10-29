@@ -533,7 +533,7 @@ fn sync_game_stats(ui: &AppWindow, chosen: &[GameMetric]) {
         MangoHudStatus::Ready if std::env::var_os("MANGOHUD").is_none() => {
             "MangoHud is set up. Log out and back in to turn it on for every game.".into()
         }
-        MangoHudStatus::Ready => "MangoHud is on for every Vulkan game, with its overlay hidden.".into(),
+        MangoHudStatus::Ready => "MangoHud is on for every Vulkan game, with its overlay invisible.".into(),
         MangoHudStatus::NotSetUp => format!(
             "MangoHud is installed but not set up for OpenCUE. This adds a few lines to {} and sets MANGOHUD=1 in {}.",
             gamestats::mangohud_config().display(),

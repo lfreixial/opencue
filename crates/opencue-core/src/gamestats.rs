@@ -6,10 +6,11 @@
 //! window of frame times.
 //!
 //! Setup also sets `MANGOHUD=1` for the whole login session (see [`env_file`]) and adds
-//! `no_display`, so every Vulkan game logs without a per-game launch option and without
-//! drawing MangoHud's overlay (its toggle key still shows it).
+//! makes the overlay fully transparent, so every Vulkan game logs without a per-game launch
+//! option and without anything drawn over it. (`no_display` would hide it too, but MangoHud then
+//! stops logging.)
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -129,7 +130,7 @@ pub fn setup_mangohud() -> io::Result<PathBuf> {
 
 fn block(dir: &Path) -> String {
     format!(
-        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\n# The overlay stays hidden until its toggle key is pressed.\nno_display\nautostart_log=1\nlog_interval=0\noutput_folder={}\n{BLOCK_END}\n",
+        "{BLOCK_START}\n# Log every frame to a file OpenCUE reads for the Nexus, and deletes after the game.\n# The overlay is transparent: no_display would also stop the logging.\nalpha=0\nbackground_alpha=0\nautostart_log=1\nlog_interval=0\nlog_duration=0\noutput_folder={}\n{BLOCK_END}\n",
         dir.display()
     )
 }
@@ -170,6 +171,8 @@ pub struct LogTracker {
     /// Joined mid-file: the first line read is the tail of a row.
     skip_line: bool,
     frames: VecDeque<Frame>,
+    /// Size of each active log at the last poll, to tell which one is the game.
+    sizes: HashMap<PathBuf, u64>,
 }
 
 impl LogTracker {
@@ -179,25 +182,32 @@ impl LogTracker {
 
     /// Read whatever the game has logged since the last call. `None` when no game is running.
     pub fn poll(&mut self) -> Option<GameStats> {
-        let dir = log_dir();
-        let Some(newest) = newest_log(&dir).filter(|(_, age)| *age < IDLE).map(|(p, _)| p) else {
-            *self = Self::default();
+        let logs = active_logs(&log_dir());
+        let chosen = busiest(&logs, &self.sizes);
+        self.sizes = logs.into_iter().collect();
+        let Some(chosen) = chosen else {
+            self.reset();
             return None;
         };
-        if self.path.as_ref() != Some(&newest) {
-            *self = Self::default();
-            if let Err(e) = self.open(&newest) {
-                log::debug!("cannot read {}: {e}", newest.display());
+        if self.path.as_ref() != Some(&chosen) {
+            self.reset();
+            if let Err(e) = self.open(&chosen) {
+                log::debug!("cannot read {}: {e}", chosen.display());
                 return None;
             }
         }
         if let Err(e) = self.read_new() {
-            log::debug!("cannot read {}: {e}", newest.display());
-            *self = Self::default();
+            log::debug!("cannot read {}: {e}", chosen.display());
+            self.reset();
             return None;
         }
-        let game = game_name(&newest);
+        let game = game_name(&chosen);
         stats(&self.frames).map(|s| GameStats { game, ..s })
+    }
+
+    /// Forget the log being followed (but not the sizes).
+    fn reset(&mut self) {
+        *self = Self { sizes: std::mem::take(&mut self.sizes), ..Self::default() };
     }
 
     fn open(&mut self, path: &Path) -> io::Result<()> {
@@ -291,23 +301,40 @@ fn game_name(path: &Path) -> String {
     name.unwrap_or(stem).to_string()
 }
 
-/// The most recently written per-frame log (not a summary) and how long ago it was written.
-fn newest_log(dir: &Path) -> Option<(PathBuf, Duration)> {
-    fs::read_dir(dir)
-        .ok()?
+/// Per-frame logs (not summaries) written to in the last few seconds, with their sizes.
+fn active_logs(dir: &Path) -> Vec<(PathBuf, u64)> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    entries
         .flatten()
         .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".csv") && !n.ends_with("_summary.csv")))
         .filter_map(|e| {
-            let age = SystemTime::now().duration_since(e.metadata().ok()?.modified().ok()?).unwrap_or_default();
-            Some((e.path(), age))
+            let meta = e.metadata().ok()?;
+            let age = SystemTime::now().duration_since(meta.modified().ok()?).unwrap_or_default();
+            (age < IDLE).then(|| (e.path(), meta.len()))
         })
-        .min_by_key(|(_, age)| *age)
+        .collect()
+}
+
+/// The log that grew most since the last poll. Every Vulkan app loads MangoHud, so a terminal or
+/// browser logs too, but only when it redraws; a game logs every frame.
+fn busiest(logs: &[(PathBuf, u64)], before: &HashMap<PathBuf, u64>) -> Option<PathBuf> {
+    logs.iter()
+        .max_by_key(|(path, size)| size.saturating_sub(before.get(path).copied().unwrap_or(0)))
+        .map(|(path, _)| path.clone())
 }
 
 /// Make sure the log folder exists (MangoHud won't create it, e.g. after the cache is cleared) and
 /// delete logs of games that closed a while ago; they grow by ~15 KB per second of play.
 pub fn maintain_log_dir() {
-    if fs::read_to_string(mangohud_config()).is_ok_and(|t| t.contains(BLOCK_START)) {
+    let text = fs::read_to_string(mangohud_config()).unwrap_or_default();
+    if text.contains(BLOCK_START) {
+        // Set up by an older OpenCUE: bring the block up to date, since the user already chose it.
+        if !text.contains(&block(&log_dir())) {
+            match setup_mangohud() {
+                Ok(path) => log::info!("updated OpenCUE's block in {}", path.display()),
+                Err(e) => log::warn!("cannot update {}: {e}", mangohud_config().display()),
+            }
+        }
         let _ = fs::create_dir_all(log_dir());
     }
     let Ok(entries) = fs::read_dir(log_dir()) else { return };
@@ -378,6 +405,16 @@ mod tests {
         assert_eq!(game_name(Path::new("/x/vkcube_2026-10-26_17-51-06.csv")), "vkcube");
         assert_eq!(game_name(Path::new("/x/Cyberpunk2077.exe_2026-10-26_17-51-06.csv")), "Cyberpunk2077.exe");
         assert_eq!(game_name(Path::new("/x/my_game_2026-10-26_17-51-06.csv")), "my_game");
+    }
+
+    #[test]
+    fn follows_the_log_that_grows_fastest() {
+        let (game, term) = (PathBuf::from("/l/game.exe_x_y.csv"), PathBuf::from("/l/vibeterm_x_y.csv"));
+        let before = HashMap::from([(game.clone(), 50_000), (term.clone(), 90_000)]);
+        // The terminal's log is bigger, but the game's grew more since the last poll.
+        let now = [(game.clone(), 58_000), (term.clone(), 90_400)];
+        assert_eq!(busiest(&now, &before), Some(game));
+        assert_eq!(busiest(&[], &before), None);
     }
 
     #[test]
