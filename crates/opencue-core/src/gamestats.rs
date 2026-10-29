@@ -222,6 +222,8 @@ pub struct LogTracker {
     /// Size of each active log at the last poll, to tell which one is the game.
     sizes: HashMap<PathBuf, u64>,
     last_poll: Option<Instant>,
+    /// For each active log, whether a game launcher started its program.
+    launched: HashMap<PathBuf, bool>,
 }
 
 impl LogTracker {
@@ -234,8 +236,16 @@ impl LogTracker {
         let logs = active_logs(&log_dir());
         let secs = self.last_poll.map_or(0.0, |t| t.elapsed().as_secs_f64());
         self.last_poll = Some(Instant::now());
-        let games = if logs.is_empty() { HashSet::new() } else { game_processes() };
-        let chosen = choose_log(&logs, &self.sizes, secs, |name| is_game(&games, name));
+        // Whether a log is a game's can't change, so look at the processes once per new log.
+        if logs.iter().any(|(path, _)| !self.launched.contains_key(path)) {
+            let games = game_processes();
+            for (path, _) in &logs {
+                self.launched.entry(path.clone()).or_insert_with(|| is_game(&games, &game_name(path)));
+            }
+        }
+        self.launched.retain(|path, _| logs.iter().any(|(p, _)| p == path));
+        let launched = &self.launched;
+        let chosen = choose_log(&logs, &self.sizes, secs, |path| launched.get(path).copied().unwrap_or(false));
         self.sizes = logs.into_iter().collect();
         let Some(chosen) = chosen else {
             self.reset();
@@ -267,7 +277,12 @@ impl LogTracker {
 
     /// Forget the log being followed (but not the sizes).
     fn reset(&mut self) {
-        *self = Self { sizes: std::mem::take(&mut self.sizes), last_poll: self.last_poll, ..Self::default() };
+        *self = Self {
+            sizes: std::mem::take(&mut self.sizes),
+            launched: std::mem::take(&mut self.launched),
+            last_poll: self.last_poll,
+            ..Self::default()
+        };
     }
 
     fn open(&mut self, path: &Path) -> io::Result<()> {
@@ -385,11 +400,11 @@ fn choose_log(
     logs: &[(PathBuf, u64)],
     before: &HashMap<PathBuf, u64>,
     secs: f64,
-    is_game: impl Fn(&str) -> bool,
+    is_game: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     let growth = |(path, size): &&(PathBuf, u64)| size.saturating_sub(before.get(path).copied().unwrap_or(0));
     let busiest = |logs: Vec<&(PathBuf, u64)>| logs.into_iter().max_by_key(growth).map(|(path, _)| path.clone());
-    let games: Vec<_> = logs.iter().filter(|(path, _)| is_game(&game_name(path))).collect();
+    let games: Vec<_> = logs.iter().filter(|(path, _)| is_game(path)).collect();
     if !games.is_empty() {
         return busiest(games);
     }
@@ -530,8 +545,8 @@ mod tests {
             PathBuf::from("/l/vibeterm_2026-10-29_13-37-49.csv"),
         );
         let before = HashMap::from([(game.clone(), 50_000), (term.clone(), 90_000)]);
-        let launched = |name: &str| name == "game.exe";
-        let nothing = |_: &str| false;
+        let launched = |path: &Path| game_name(path) == "game.exe";
+        let nothing = |_: &Path| false;
         // Started by a launcher: chosen even while it isn't growing (MangoHud reloading its config).
         let now = [(game.clone(), 50_000), (term.clone(), 91_000)];
         assert_eq!(choose_log(&now, &before, 0.5, launched), Some(game.clone()));
