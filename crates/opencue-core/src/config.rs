@@ -88,10 +88,11 @@ pub enum Effect {
     Marquee,
     Twinkle,
     Temperature,
+    Ambilight,
 }
 
 impl Effect {
-    pub const ALL: [Effect; 12] = [
+    pub const ALL: [Effect; 13] = [
         Effect::Off,
         Effect::Static,
         Effect::Gradient,
@@ -104,6 +105,7 @@ impl Effect {
         Effect::Marquee,
         Effect::Twinkle,
         Effect::Temperature,
+        Effect::Ambilight,
     ];
 
     pub fn label(self) -> &'static str {
@@ -120,6 +122,7 @@ impl Effect {
             Effect::Marquee => "Marquee",
             Effect::Twinkle => "Twinkle",
             Effect::Temperature => "Temperature",
+            Effect::Ambilight => "Ambilight",
         }
     }
 
@@ -231,6 +234,7 @@ pub struct Profile {
     /// Keys are zone ids ("cc:pump", "cc:fan1", "mm700"); "*" applies to zones without their own entry.
     pub lighting: BTreeMap<String, Lighting>,
     pub lcd: LcdConfig,
+    pub ambilight: crate::ambilight::Layout,
 }
 
 impl Default for Profile {
@@ -240,7 +244,12 @@ impl Default for Profile {
         for i in 1..=6 {
             cooling.insert(format!("fan{i}"), ChannelCooling::default());
         }
-        Self { cooling, lighting: BTreeMap::from([("*".into(), Lighting::default())]), lcd: LcdConfig::default() }
+        Self {
+            cooling,
+            lighting: BTreeMap::from([("*".into(), Lighting::default())]),
+            lcd: LcdConfig::default(),
+            ambilight: Default::default(),
+        }
     }
 }
 
@@ -548,6 +557,9 @@ impl Config {
             self.nexus.pages = NexusConfig::default().pages;
         }
         self.settings.min_fan_duty = self.settings.min_fan_duty.min(100);
+        for profile in self.profiles.values_mut() {
+            profile.ambilight.normalize();
+        }
         self
     }
 

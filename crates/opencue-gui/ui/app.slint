@@ -4,6 +4,7 @@ export struct ChannelInfo { id: string, name: string, rpm: string, duty: int, co
 export struct Zone { id: string, name: string }
 export struct DeviceRow { name: string, detail: string, status: string, ok: bool }
 export struct CurvePoint { t: float, d: float }
+export struct AmbilightDevice { id: string, name: string, px: float, py: float, tint: color, enabled: bool }
 
 // Conversions implemented in Rust.
 export global Util {
@@ -363,6 +364,18 @@ export component AppWindow inherits Window {
     callback zone-selected(int);
     callback zone-custom-toggled(bool);
     callback lighting-changed();
+    in property <bool> uses-ambilight;
+    in property <bool> ambilight-active;
+    in property <bool> ambilight-has-frame;
+    in property <string> ambilight-status;
+    in property <image> ambilight-image;
+    in property <[AmbilightDevice]> ambilight-devices;
+    in-out property <float> ambilight-size;
+    callback ambilight-moved(string, float, float);
+    callback ambilight-size-changed();
+    callback ambilight-start();
+    callback ambilight-stop();
+    callback ambilight-reset();
 
     // lcd
     in property <bool> lcd-present;
@@ -767,13 +780,111 @@ export component AppWindow inherits Window {
                                 selected => { root.lighting-changed(); }
                             }
                         }
-                        SliderRow { label: "Speed"; minimum: 1; value <=> root.speed; changed => { root.lighting-changed(); } }
+                        if !root.uses-ambilight: SliderRow { label: "Speed"; minimum: 1; value <=> root.speed; changed => { root.lighting-changed(); } }
                         SliderRow { label: "Brightness"; value <=> root.brightness; changed => { root.lighting-changed(); } }
-                        CheckBox { text: "Reverse direction"; checked <=> root.reverse; toggled => { root.lighting-changed(); } }
+                        if !root.uses-ambilight: CheckBox { text: "Reverse direction"; checked <=> root.reverse; toggled => { root.lighting-changed(); } }
+                    }
+                    if root.uses-ambilight: VerticalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "Drag each device to the part of your monitor it should follow. Each box shows the area sampled for that device.";
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: root.ambilight-active ? "Change monitor…" : "Choose monitor…";
+                                enabled: root.connected;
+                                clicked => { root.ambilight-start(); }
+                            }
+                            if root.ambilight-active: Button { text: "Stop sharing"; clicked => { root.ambilight-stop(); } }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button { text: "Reset positions"; clicked => { root.ambilight-reset(); } }
+                        }
+                        Text { text: root.connected ? root.ambilight-status : "Start the OpenCUE service to share your monitor."; color: Theme.muted; wrap: word-wrap; font-size: 12px; }
+                        monitor := Rectangle {
+                            min-height: 180px;
+                            max-height: 310px;
+                            vertical-stretch: 1;
+                            background: #101119;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                            border-radius: 6px;
+                            if root.ambilight-has-frame: Image {
+                                source: root.ambilight-image;
+                                width: 100%; height: 100%;
+                                image-fit: fill;
+                                opacity: 0.6;
+                            }
+                            if !root.ambilight-has-frame: Text {
+                                text: "YOUR MONITOR";
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                color: #393b50;
+                                font-size: 24px;
+                                font-weight: 700;
+                            }
+                            // Sampling rectangles are clipped to the monitor, just like the sampler.
+                            for device in root.ambilight-devices: Rectangle {
+                                x: max(0, device.px - root.ambilight-size / 200) * monitor.width;
+                                y: max(0, device.py - root.ambilight-size / 200) * monitor.height;
+                                width: (min(1, device.px + root.ambilight-size / 200) - max(0, device.px - root.ambilight-size / 200)) * monitor.width;
+                                height: (min(1, device.py + root.ambilight-size / 200) - max(0, device.py - root.ambilight-size / 200)) * monitor.height;
+                                background: device.tint.with-alpha(0.12);
+                                border-width: 1px;
+                                border-color: device.enabled ? device.tint.with-alpha(0.7) : Theme.line;
+                            }
+                            for device in root.ambilight-devices: Rectangle {
+                                x: clamp(device.px * monitor.width - self.width / 2, 0px, monitor.width - self.width);
+                                y: clamp(device.py * monitor.height - self.height / 2, 0px, monitor.height - self.height);
+                                width: 82px;
+                                height: 30px;
+                                border-radius: 6px;
+                                background: #15161de8;
+                                border-width: 2px;
+                                border-color: device.enabled ? device.tint : Theme.muted;
+                                Text {
+                                    text: device.name;
+                                    color: device.enabled ? Theme.text : Theme.muted;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                drag := TouchArea {
+                                    mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+                                    property <float> start-x;
+                                    property <float> start-y;
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.down {
+                                            self.start-x = (parent.x + self.mouse-x) / monitor.width - device.px;
+                                            self.start-y = (parent.y + self.mouse-y) / monitor.height - device.py;
+                                        }
+                                    }
+                                    moved => {
+                                        if self.pressed {
+                                            root.ambilight-moved(device.id,
+                                                (parent.x + self.mouse-x) / monitor.width - self.start-x,
+                                                (parent.y + self.mouse-y) / monitor.height - self.start-y);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            Text { text: "LEFT"; color: Theme.muted; font-size: 10px; }
+                            Text { text: "TOP ↑   ·   ↓ BOTTOM"; color: Theme.muted; font-size: 10px; horizontal-alignment: center; }
+                            Text { text: "RIGHT"; color: Theme.muted; font-size: 10px; horizontal-alignment: right; }
+                        }
+                        if root.ambilight-devices.length == 0: Text { text: "Connect an RGB device to place it on the monitor."; color: Theme.muted; }
+                        SliderRow { label: "Sample area"; minimum: 5; value <=> root.ambilight-size; changed => { root.ambilight-size-changed(); } }
+                        Text { text: "Positions are saved in this profile. Grey devices use another effect. Sharing continues when you close this window."; color: Theme.muted; wrap: word-wrap; font-size: 11px; }
                     }
                     Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
-                    Label { text: "PREVIEW"; }
-                    Rectangle {
+                    if !root.uses-ambilight: Label { text: "PREVIEW"; }
+                    if !root.uses-ambilight: Rectangle {
                         height: 44px;
                         border-radius: 8px;
                         background: #0b0b10;

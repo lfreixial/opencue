@@ -1,5 +1,5 @@
-//! RGB effects. Every effect is a pure function of time, so the daemon and the GUI preview
-//! render exactly the same thing.
+//! RGB effects shared by the daemon and GUI preview. Ambilight uses captured screen samples
+//! from `ambilight` and stays dark here when no capture is available.
 
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +102,7 @@ pub fn render(cfg: &Lighting, pos: f64, n: usize, phase: f32, temp: Option<f32>)
     let pos = |i: usize| if n == 0 { 0.0 } else { i as f32 / n as f32 };
 
     let mut out: Vec<[u8; 3]> = match cfg.effect {
-        Effect::Off => vec![[0, 0, 0]; n],
+        Effect::Off | Effect::Ambilight => vec![[0, 0, 0]; n],
         Effect::Static => vec![c0; n],
         Effect::Gradient => (0..n).map(|i| gradient(&colors, pos(i), false)).collect(),
         Effect::Breathing => {
