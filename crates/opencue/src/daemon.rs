@@ -4,7 +4,7 @@
 //! resume from suspend, protocol hiccup) exits and the manager reopens the device a few
 //! seconds later, so one misbehaving device never takes the others down.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -222,6 +222,9 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
     let mut controllers: BTreeMap<u8, DutyController> = BTreeMap::new();
     let mut last_duties: BTreeMap<u8, u8> = BTreeMap::new();
     let mut last_duty_write = Instant::now();
+    // Right after a USB reset (waking from sleep) the Commander Core may not have found its fans
+    // yet, so pick up any that turn up later. Once found, a fan stays under control.
+    let mut fans: BTreeSet<u8> = cc.fan_channels.iter().copied().collect();
     let mut next_status = Instant::now();
     let mut last_colors: Option<BTreeMap<u8, Vec<[u8; 3]>>> = None;
     let mut last_color_write = Instant::now();
@@ -244,11 +247,16 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
         if now >= next_status || rev != seen_rev {
             next_status = now + Duration::from_secs(1);
             let st = cc.status()?;
+            for (&ch, _) in st.connected.iter().filter(|(_, ok)| **ok) {
+                if fans.insert(ch) {
+                    log::info!("Commander Core: {} connected", channel_name(ch));
+                }
+            }
             liquid = st.liquid_temp;
             let emergency = liquid.is_some_and(|t| t >= cfg.settings.critical_liquid_temp)
                 || sys.cpu_temp.is_some_and(|t| t >= cfg.settings.critical_cpu_temp);
             let mut duties = BTreeMap::new();
-            for &ch in &cc.fan_channels {
+            for &ch in &fans {
                 let pump = ch == 0;
                 let ccfg = profile.cooling_for(&channel_name(ch));
                 let min = if pump { commander_core::PUMP_MIN_DUTY as f32 } else { cfg.settings.min_fan_duty as f32 };
@@ -265,8 +273,7 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
             sh.telemetry(|t| {
                 t.liquid_temp = liquid;
                 t.emergency = emergency;
-                t.channels = cc
-                    .fan_channels
+                t.channels = fans
                     .iter()
                     .map(|&ch| {
                         let name = if ch == 0 { "Pump".into() } else { format!("Fan {ch}") };
