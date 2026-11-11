@@ -14,7 +14,7 @@ optdepends=('wayland: run the app on Wayland'
             'libxi: run the app on X11'
             'xdg-desktop-portal: choose LCD images in the app'
             'mangohud: FPS and frame times for game stats on the Nexus'
-            'curl: cover art for now playing'
+            'curl: update notifications and cover art for now playing'
             'ffmpeg: thumbnails for videos in now playing')
 provides=('opencue')
 conflicts=('opencue')
