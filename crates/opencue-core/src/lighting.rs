@@ -92,7 +92,7 @@ fn hash(a: u32, b: u32) -> f32 {
 /// Render one frame for `n` LEDs.
 /// * `pos` - where the effect is (see [`EffectClock`]); speed and direction are already in it
 /// * `phase` - per-zone offset (0..1) so waves ripple from fan to fan. Effects that colour a whole
-///   zone the same ignore it, so every device shows the same colour.
+///   zone the same, and the Spinner, ignore it so every device shows the same moment.
 /// * `temp` - current reading of the effect's sensor, for the Temperature effect
 pub fn render(cfg: &Lighting, pos: f64, n: usize, phase: f32, temp: Option<f32>) -> Vec<[u8; 3]> {
     let colors: Vec<[u8; 3]> =
@@ -115,12 +115,16 @@ pub fn render(cfg: &Lighting, pos: f64, n: usize, phase: f32, temp: Option<f32>)
         Effect::Rainbow => vec![hsv(tt * 0.1, 1.0, 1.0); n],
         Effect::RainbowWave => (0..n).map(|i| hsv(pos(i) + tt * 0.25 + phase, 1.0, 1.0)).collect(),
         Effect::ColorWave => (0..n).map(|i| gradient(&colors, pos(i) - tt * 0.25 + phase, true)).collect(),
+        // No `phase`: every fan's spinner points the same way at the same moment.
         Effect::Spinner => {
-            let head = (tt * 0.6 + phase).rem_euclid(1.0) * n as f32;
+            let head = (tt * 0.6).rem_euclid(1.0) * n as f32;
+            let tail = n as f32 * 0.35;
             (0..n)
                 .map(|i| {
-                    let d = (head - i as f32).rem_euclid(n.max(1) as f32);
-                    let k = (1.0 - d / (n as f32 * 0.35)).max(0.0);
+                    // How far behind the head this LED is; -1..0 is the LED the head is moving
+                    // onto, which fades in, so the head glides between LEDs instead of stepping.
+                    let d = (head - i as f32 + 1.0).rem_euclid(n.max(1) as f32) - 1.0;
+                    let k = if d < 0.0 { 1.0 + d } else { (1.0 - d / tail).max(0.0) };
                     lerp(colors.get(1).copied().unwrap_or([0, 0, 0]), c0, k * k)
                 })
                 .collect()
@@ -176,7 +180,7 @@ mod tests {
 
     #[test]
     fn whole_zone_effects_match_across_devices() {
-        for effect in [Effect::Rainbow, Effect::ColorShift] {
+        for effect in [Effect::Rainbow, Effect::ColorShift, Effect::Spinner] {
             let cfg = Lighting { effect, speed: 1, ..Default::default() };
             assert_eq!(render(&cfg, 12.0, 8, 0.0, None), render(&cfg, 12.0, 8, 3.0 / 7.0, None), "{effect:?}");
         }
@@ -193,6 +197,19 @@ mod tests {
         assert!((clock.follow(&fast, 1011.0) - before - 1.8).abs() < 1e-9);
         let back = Lighting { reverse: true, ..fast };
         assert_eq!(clock.follow(&back, 1011.0), clock.pos_at(1011.0));
+    }
+
+    #[test]
+    fn spinner_glides_between_leds() {
+        // At the default speed and the daemon's ~30 fps, no LED of an 8-LED fan should snap
+        // from off to on between two frames.
+        let cfg = Lighting { effect: Effect::Spinner, colors: vec!["#ff0000".into()], ..Default::default() };
+        let frames: Vec<_> = (0..120).map(|f| render(&cfg, f as f64 / 30.0, 8, 0.0, None)).collect();
+        for w in frames.windows(2) {
+            for (a, b) in w[0].iter().zip(&w[1]) {
+                assert!((a[0] as i32 - b[0] as i32).abs() < 100, "{a:?} -> {b:?}");
+            }
+        }
     }
 
     #[test]
