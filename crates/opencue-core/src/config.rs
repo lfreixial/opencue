@@ -496,6 +496,8 @@ pub struct Settings {
     pub critical_cpu_temp: f32,
     /// On exit, hand control back to the devices' built-in (hardware) mode.
     pub restore_hardware_on_exit: bool,
+    /// The app checks GitHub for a newer release when it opens and once a day.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -506,6 +508,7 @@ impl Default for Settings {
             critical_liquid_temp: 60.0,
             critical_cpu_temp: 95.0,
             restore_hardware_on_exit: true,
+            check_updates: true,
         }
     }
 }

@@ -448,6 +448,17 @@ export component AppWindow inherits Window {
     callback autostart-toggled(bool);
     callback start-minimized-toggled(bool);
 
+    // updates
+    in-out property <bool> check-updates: true;
+    // The newer release's version, or "" when this one is the latest.
+    in property <string> update-version;
+    in property <string> update-status;
+    in property <bool> update-can-install;
+    in property <bool> updating;
+    callback update-install();
+    callback update-check();
+    callback update-notes();
+
     HorizontalLayout {
         // ---------------------------------------------------------------- sidebar
         Rectangle {
@@ -470,6 +481,18 @@ export component AppWindow inherits Window {
                 NavItem { label: "iCUE Nexus"; icon: "▭"; active: root.page == 4; clicked => { root.page = 4; } }
                 NavItem { label: "Settings"; icon: "⚙"; active: root.page == 5; clicked => { root.page = 5; } }
                 Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
+                if root.update-version != "": Rectangle {
+                    height: 34px;
+                    border-radius: 8px;
+                    background: update-ta.has-hover ? #15364d : #10283a;
+                    Text {
+                        text: "⬆ Update available: " + root.update-version;
+                        color: Theme.accent;
+                        font-size: 12px;
+                        font-weight: 600;
+                    }
+                    update-ta := TouchArea { clicked => { root.page = 5; } }
+                }
                 Rectangle {
                     height: 54px;
                     border-radius: 8px;
@@ -1123,6 +1146,21 @@ export component AppWindow inherits Window {
                         color: Theme.muted;
                         font-size: 12px;
                         wrap: word-wrap;
+                    }
+                    Label { text: "UPDATES"; }
+                    Switch { text: "Check for updates"; checked <=> root.check-updates; toggled => { root.settings-changed(); } }
+                    Text { text: root.update-status; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        if root.update-can-install && root.update-version != "": Button {
+                            text: root.updating ? "Updating…" : "Update to " + root.update-version;
+                            primary: true;
+                            enabled: !root.updating;
+                            clicked => { root.update-install(); }
+                        }
+                        if root.update-version != "": Button { text: "What's new"; clicked => { root.update-notes(); } }
+                        Button { text: "Check now"; enabled: !root.updating; clicked => { root.update-check(); } }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                     Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
                 }

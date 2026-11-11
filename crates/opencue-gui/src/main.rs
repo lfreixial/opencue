@@ -24,6 +24,7 @@ use slint::{
 };
 
 mod screenshot;
+mod update;
 
 slint::include_modules!();
 
@@ -74,6 +75,8 @@ struct App {
     curve_points: Rc<VecModel<CurvePoint>>,
     leds: Rc<VecModel<Color>>,
     tx: mpsc::Sender<Request>,
+    /// The newer release found by the last update check.
+    release: Option<update::Release>,
 }
 
 thread_local! {
@@ -601,6 +604,78 @@ fn sync_settings(ui: &AppWindow) {
         ui.set_min_fan(s.min_fan_duty as f32);
         ui.set_crit_liquid(s.critical_liquid_temp);
         ui.set_crit_cpu(s.critical_cpu_temp);
+        ui.set_check_updates(s.check_updates);
+    });
+}
+
+// ------------------------------------------------------------------------------- updates
+
+/// Ask GitHub for the latest release in the background, and show what it found.
+fn check_for_update(ui: slint::Weak<AppWindow>) {
+    if let Some(ui) = ui.upgrade() {
+        ui.set_update_status("Checking for updates…".into());
+    }
+    thread::spawn(move || {
+        let result = update::latest();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = ui.upgrade() else { return };
+            if ui.get_updating() {
+                return;
+            }
+            let current = env!("CARGO_PKG_VERSION");
+            let release = match result {
+                Ok(r) if update::is_newer(&r.version, current) => r,
+                Ok(_) => {
+                    ui.set_update_version("".into());
+                    ui.set_update_status(ss(format!("You have the latest version ({current}).")));
+                    return;
+                }
+                Err(e) => {
+                    ui.set_update_status(ss(format!("Couldn't check for updates: {e:#}")));
+                    return;
+                }
+            };
+            let kind = update::install_kind();
+            ui.set_update_version(ss(&release.version));
+            ui.set_update_can_install(kind == update::Install::User);
+            ui.set_update_status(ss(match kind {
+                update::Install::User => format!("OpenCUE {} is available (you have {current}).", release.version),
+                update::Install::Package => format!(
+                    "OpenCUE {} is available (you have {current}). Update it with your package manager, for example yay or paru.",
+                    release.version
+                ),
+                update::Install::Other => format!(
+                    "OpenCUE {} is available (you have {current}). This copy isn't installed, so update it with git pull and ./install.sh.",
+                    release.version
+                ),
+            }));
+            with_app(|app| app.release = Some(release));
+        });
+    });
+}
+
+/// Download and install the newer release, then restart the app on it.
+fn install_update(ui: &AppWindow) {
+    let Some(release) = with_app(|app| app.release.clone()) else { return };
+    ui.set_updating(true);
+    ui.set_update_status(ss(format!("Downloading and installing OpenCUE {}…", release.version)));
+    let w = ui.as_weak();
+    thread::spawn(move || {
+        let result = update::install(&release.version);
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = w.upgrade() else { return };
+            match result {
+                Ok(()) => {
+                    ui.set_update_status("Updated. Restarting OpenCUE…".into());
+                    update::relaunch();
+                    let _ = slint::quit_event_loop();
+                }
+                Err(e) => {
+                    ui.set_updating(false);
+                    ui.set_update_status(ss(format!("The update failed: {e:#}")));
+                }
+            }
+        });
     });
 }
 
@@ -951,6 +1026,7 @@ fn main() -> anyhow::Result<()> {
             curve_points,
             leds,
             tx: spawn_sender(),
+            release: None,
         })
     });
 
@@ -1537,6 +1613,10 @@ fn main() -> anyhow::Result<()> {
         let ui = w.unwrap();
         let (f, r, m, l, c) =
             (ui.get_fahrenheit(), ui.get_restore_hw(), ui.get_min_fan(), ui.get_crit_liquid(), ui.get_crit_cpu());
+        let check = ui.get_check_updates();
+        if check && !with_app(|app| app.cfg.settings.check_updates) {
+            check_for_update(ui.as_weak());
+        }
         edit(
             &ui,
             |cfg| {
@@ -1546,6 +1626,7 @@ fn main() -> anyhow::Result<()> {
                 s.min_fan_duty = m.round().clamp(0.0, 100.0) as u8;
                 s.critical_liquid_temp = l.round();
                 s.critical_cpu_temp = c.round();
+                s.check_updates = check;
             },
             sync_settings,
         );
@@ -1567,6 +1648,34 @@ fn main() -> anyhow::Result<()> {
 
     // -- timers: LED preview at 30 fps, screen previews once a second, GIF at its own pace
     let w = ui.as_weak();
+    ui.on_update_check({
+        let w = ui.as_weak();
+        move || check_for_update(w.clone())
+    });
+    ui.on_update_install({
+        let w = ui.as_weak();
+        move || install_update(&w.unwrap())
+    });
+    ui.on_update_notes(|| {
+        if let Some(url) = with_app(|app| app.release.as_ref().map(|r| r.url.clone())) {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+    });
+    // Check a few seconds after opening, then once a day while the app runs (it usually opens
+    // minimized at login and stays open).
+    let update_timer = Timer::default();
+    if screenshot.is_none() {
+        let w = ui.as_weak();
+        let check_if_enabled = move || {
+            if with_app(|app| app.cfg.settings.check_updates) {
+                check_for_update(w.clone());
+            }
+        };
+        let first = check_if_enabled.clone();
+        Timer::single_shot(Duration::from_secs(5), first);
+        update_timer.start(TimerMode::Repeated, Duration::from_secs(24 * 60 * 60), check_if_enabled);
+    }
+
     let led_timer = Timer::default();
     led_timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
         let Some(ui) = w.upgrade() else { return };

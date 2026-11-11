@@ -77,7 +77,10 @@ cd opencue
 sudo ./install.sh --udev   # once: give your user access to the devices (no root at runtime)
 ```
 
-To update a download or source install, get the new version and run `./install.sh` again.
+**Updates**: the app checks GitHub for a new release when it opens and once a day (Settings, Updates; turn it
+off there). A download or source install updates itself with the **Update** button; an AUR install updates
+with your AUR helper as usual. The check is a single request to GitHub's public API, and nothing about you or
+your system is sent.
 
 Then open **OpenCUE** from your app menu, or run `opencue-gui`. It also opens minimized at login
 (`~/.config/autostart/opencue.desktop`); Settings has switches to turn that off or open the window normally.
