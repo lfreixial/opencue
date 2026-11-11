@@ -1,0 +1,63 @@
+name: Release
+
+# Builds the Linux binaries and attaches them to the GitHub release for the tag, so installs from
+# the release (the download link, install one-liner and the AUR opencue-bin package) are counted
+# in the release's download stats.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach binaries to (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+  ASSET: opencue-x86_64-linux.tar.gz
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # Debian 12's glibc (2.36), so the binaries also run on older distros than the runner's.
+    container: debian:bookworm
+    steps:
+      - name: Install build tools and system libraries (Slint GUI)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config curl ca-certificates git \
+            libfontconfig1-dev libxkbcommon-dev
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the tag matches the version in Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          dir=opencue-linux
+          mkdir -p "$dir/bin"
+          cp target/release/opencue target/release/opencue-gui "$dir/bin/"
+          cp -r data install.sh README.md LICENSE "$dir/"
+          tar czf "$ASSET" "$dir"
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          cat "$ASSET.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          fail_on_unmatched_files: true

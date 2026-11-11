@@ -1,0 +1,37 @@
+# Maintainer: Luis Freixial
+
+pkgname=opencue-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Open-source Corsair iCUE replacement: fan and pump curves, RGB, Elite LCD and iCUE NEXUS"
+arch=('x86_64')
+url="https://github.com/lfreixial/opencue"
+license=('GPL-3.0-or-later')
+depends=('fontconfig' 'freetype2' 'libxkbcommon' 'gcc-libs' 'glibc')
+optdepends=('wayland: run the app on Wayland'
+            'libx11: run the app on X11'
+            'libxcursor: run the app on X11'
+            'libxi: run the app on X11'
+            'xdg-desktop-portal: choose LCD images in the app'
+            'mangohud: FPS and frame times for game stats on the Nexus'
+            'curl: cover art for now playing'
+            'ffmpeg: thumbnails for videos in now playing')
+provides=('opencue')
+conflicts=('opencue')
+install=opencue-bin.install
+# The release's prebuilt download, so AUR installs show up in its download count.
+source=("opencue-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/opencue-x86_64-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd opencue-linux
+    install -Dm755 bin/opencue "$pkgdir/usr/bin/opencue"
+    install -Dm755 bin/opencue-gui "$pkgdir/usr/bin/opencue-gui"
+    install -Dm644 data/70-opencue.rules "$pkgdir/usr/lib/udev/rules.d/70-opencue.rules"
+    sed 's|%h/.local/bin/opencue|/usr/bin/opencue|' data/opencue.service \
+        | install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/opencue.service"
+    install -Dm644 data/opencue.desktop "$pkgdir/usr/share/applications/opencue.desktop"
+    install -Dm644 data/opencue.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/opencue.svg"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/opencue/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
