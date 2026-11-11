@@ -57,7 +57,7 @@ Then unplug and replug your Corsair devices (or reboot) so the device access rul
 
 ### Any distro: prebuilt download
 
-For x86_64 Linux with glibc 2.36 or newer (Debian 12, Ubuntu 22.10, Fedora 37 and later). No Rust needed.
+For x86_64 Linux with glibc 2.35 or newer (Debian 12, Ubuntu 22.04, Fedora 36 and later). No Rust needed.
 
 ```sh
 curl -fsSL https://github.com/lfreixial/opencue/releases/latest/download/opencue-x86_64-linux.tar.gz | tar xz
