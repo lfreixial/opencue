@@ -21,7 +21,7 @@ conflicts=('opencue')
 install=opencue-bin.install
 # The release's prebuilt download, so AUR installs show up in its download count.
 source=("opencue-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/opencue-x86_64-linux.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('cf1e8df806bca87e5cbf43cc065935036ae88d73447d5e3ae09f9d831639173f')
 
 package() {
     cd opencue-linux
