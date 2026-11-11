@@ -60,6 +60,8 @@ pub struct Telemetry {
     pub game: Option<crate::gamestats::GameStats>,
     #[serde(default)]
     pub discord: DiscordState,
+    #[serde(default)]
+    pub ambilight: crate::ambilight::CaptureState,
 }
 
 /// Discord connection and call state.

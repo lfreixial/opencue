@@ -4,7 +4,11 @@ use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +29,9 @@ use slint::{
 
 mod screenshot;
 mod update;
+
+#[cfg(test)]
+mod ambilight_tests;
 
 slint::include_modules!();
 
@@ -74,6 +81,9 @@ struct App {
     lcd_loading: Option<String>,
     curve_points: Rc<VecModel<CurvePoint>>,
     leds: Rc<VecModel<Color>>,
+    ambilight_devices: Rc<VecModel<AmbilightDevice>>,
+    ambilight_preview_visible: Arc<AtomicBool>,
+    ambilight_image_sequence: Option<u64>,
     tx: mpsc::Sender<Request>,
     /// The newer release found by the last update check.
     release: Option<update::Release>,
@@ -133,7 +143,7 @@ fn temp_range(s: Sensor) -> (f32, f32) {
 
 fn color_count(e: Effect) -> i32 {
     match e {
-        Effect::Off | Effect::Rainbow | Effect::RainbowWave => 0,
+        Effect::Off | Effect::Rainbow | Effect::RainbowWave | Effect::Ambilight => 0,
         Effect::Static => 1,
         _ => 2,
     }
@@ -194,33 +204,62 @@ fn send(client: &mut Option<Client>, req: &Request) {
 
 /// Polls telemetry once a second (and the config when the daemon reports it changed).
 fn spawn_poller(ui: slint::Weak<AppWindow>) {
+    let preview_visible = with_app(|app| app.ambilight_preview_visible.clone());
     thread::spawn(move || {
         let mut client: Option<Client> = None;
         let mut last_rev: Option<u64> = None;
+        let mut next_telemetry = Instant::now();
+        let mut preview_sequence = u64::MAX;
         loop {
             if client.is_none() {
                 client = Client::connect().ok();
                 last_rev = None;
             }
-            let mut tel = None;
-            let mut cfg = None;
-            if let Some(c) = client.as_mut() {
-                match c.request(&Request::Telemetry) {
-                    Ok(Response::Telemetry(t)) => {
-                        if last_rev != Some(t.config_rev)
-                            && let Ok(Response::Config(c2)) = c.request(&Request::GetConfig)
-                        {
-                            cfg = Some(*c2);
-                            last_rev = Some(t.config_rev);
+            let started = Instant::now();
+            if started >= next_telemetry {
+                next_telemetry = started + Duration::from_secs(1);
+                let mut tel = None;
+                let mut cfg = None;
+                if let Some(c) = client.as_mut() {
+                    match c.request(&Request::Telemetry) {
+                        Ok(Response::Telemetry(t)) => {
+                            if last_rev != Some(t.config_rev)
+                                && let Ok(Response::Config(c2)) = c.request(&Request::GetConfig)
+                            {
+                                cfg = Some(*c2);
+                                last_rev = Some(t.config_rev);
+                            }
+                            tel = Some(*t);
                         }
-                        tel = Some(*t);
+                        _ => {
+                            client = None;
+                            preview_sequence = u64::MAX;
+                        }
                     }
-                    _ => client = None,
+                }
+                let connected = tel.is_some();
+                let _ = ui.upgrade_in_event_loop(move |ui| on_poll(&ui, connected, tel, cfg));
+            }
+            let preview = preview_visible.load(Ordering::Relaxed);
+            if preview && let Some(c) = client.as_mut() {
+                match c.request(&Request::AmbilightPreview(preview_sequence)) {
+                    Ok(Response::AmbilightPreview(Some(state))) => {
+                        preview_sequence = state.sequence;
+                        let _ = ui.upgrade_in_event_loop(move |ui| {
+                            with_app(|app| app.tel.ambilight = *state);
+                            sync_ambilight(&ui);
+                        });
+                    }
+                    Ok(_) => (),
+                    Err(_) => {
+                        client = None;
+                        preview_sequence = u64::MAX;
+                    }
                 }
             }
-            let connected = tel.is_some();
-            let _ = ui.upgrade_in_event_loop(move |ui| on_poll(&ui, connected, tel, cfg));
-            thread::sleep(Duration::from_secs(1));
+            // Only the small preview feed runs at 15 Hz; sensors and the rest of the UI stay at 1 Hz.
+            let interval = Duration::from_millis(if preview { 67 } else { 100 });
+            thread::sleep(interval.saturating_sub(started.elapsed()));
         }
     });
 }
@@ -229,7 +268,12 @@ fn on_poll(ui: &AppWindow, connected: bool, tel: Option<Telemetry>, cfg: Option<
     let reload = with_app(|app| {
         let was = app.connected;
         app.connected = connected;
-        if let Some(t) = tel {
+        if let Some(mut t) = tel {
+            if t.ambilight.active && t.ambilight.frame.is_none() && app.tel.ambilight.frame.is_some() {
+                // This sequence describes the retained pixels, until the preview feed replaces them.
+                t.ambilight.sequence = app.tel.ambilight.sequence;
+                t.ambilight.frame = app.tel.ambilight.frame.take();
+            }
             app.tel = t;
         }
         // Adopt the daemon's config unless the user is mid-edit (our own pending change wins).
@@ -353,6 +397,56 @@ fn sync_dashboard(ui: &AppWindow) {
             ui.set_zones(ModelRc::new(VecModel::from(zones)));
         }
     });
+    sync_ambilight(ui);
+}
+
+fn sync_ambilight(ui: &AppWindow) {
+    with_app(|app| {
+        let p = app.cfg.profile();
+        let capture = &app.tel.ambilight;
+        ui.set_ambilight_active(app.connected && capture.active);
+        ui.set_ambilight_status(ss(&capture.status));
+        ui.set_ambilight_has_frame(app.connected && capture.frame.is_some());
+        if app.ambilight_image_sequence != Some(capture.sequence)
+            && ui.get_page() == 2
+            && ui.get_uses_ambilight()
+            && let Some(frame) = capture
+                .frame
+                .as_ref()
+                .filter(|f| f.pixels.len() == opencue_core::ambilight::WIDTH * opencue_core::ambilight::HEIGHT)
+        {
+            let rgba: Vec<u8> = frame.pixels.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+            if let Some(image) =
+                RgbaImage::from_raw(opencue_core::ambilight::WIDTH as u32, opencue_core::ambilight::HEIGHT as u32, rgba)
+            {
+                ui.set_ambilight_image(to_image(&image));
+                app.ambilight_image_sequence = Some(capture.sequence);
+            }
+        }
+        ui.set_ambilight_size(p.ambilight.sample_size * 100.0);
+        let devices = app
+            .tel
+            .zones
+            .iter()
+            .map(|z| {
+                let position = p.ambilight.position(&z.id);
+                let cfg = p.lighting_for(&z.id);
+                let enabled = cfg.effect == Effect::Ambilight;
+                let [r, g, b] =
+                    capture.frame.as_ref().map_or([0, 200, 255], |f| f.sample(&p.ambilight, &z.id, cfg.brightness));
+                let name = if z.id == "mm700" { "MM700" } else { z.name.split(" · ").next().unwrap_or(&z.name) };
+                AmbilightDevice {
+                    id: ss(&z.id),
+                    name: ss(name),
+                    px: position.x,
+                    py: position.y,
+                    tint: Color::from_rgb_u8(r, g, b),
+                    enabled,
+                }
+            })
+            .collect();
+        update_model(&app.ambilight_devices, devices);
+    });
 }
 
 fn selected_channel(ui: &AppWindow) -> &'static str {
@@ -444,11 +538,13 @@ fn sync_lighting(ui: &AppWindow) {
         ui.set_color2(to_color(l.colors.get(1).map_or("#000000", |s| s)));
         ui.set_color_count(color_count(l.effect));
         ui.set_uses_sensor(l.effect == Effect::Temperature);
+        ui.set_uses_ambilight(l.effect == Effect::Ambilight);
         ui.set_speed(l.speed as f32);
         ui.set_brightness(l.brightness as f32);
         ui.set_reverse(l.reverse);
         ui.set_light_sensor(sensor_index(l.sensor));
     });
+    sync_ambilight(ui);
 }
 
 fn sync_lcd(ui: &AppWindow) {
@@ -1025,10 +1121,15 @@ fn main() -> anyhow::Result<()> {
             lcd_loading: None,
             curve_points,
             leds,
+            ambilight_devices: Rc::new(VecModel::default()),
+            ambilight_preview_visible: Arc::new(AtomicBool::new(false)),
+            ambilight_image_sequence: None,
             tx: spawn_sender(),
             release: None,
         })
     });
+
+    ui.set_ambilight_devices(with_app(|app| ModelRc::from(app.ambilight_devices.clone())));
 
     // -- colour helpers used inside the .slint file
     let util = ui.global::<Util>();
@@ -1250,6 +1351,41 @@ fn main() -> anyhow::Result<()> {
             },
             sync_lighting,
         );
+    });
+
+    let w = ui.as_weak();
+    ui.on_ambilight_moved(move |id, x, y| {
+        let ui = w.unwrap();
+        edit(
+            &ui,
+            |cfg| {
+                cfg.profile_mut()
+                    .ambilight
+                    .positions
+                    .insert(id.to_string(), opencue_core::ambilight::Position { x, y }.clamped());
+            },
+            sync_ambilight,
+        );
+    });
+    let w = ui.as_weak();
+    ui.on_ambilight_size_changed(move || {
+        let ui = w.unwrap();
+        let size = ui.get_ambilight_size() / 100.0;
+        edit(&ui, |cfg| cfg.profile_mut().ambilight.sample_size = size.clamp(0.05, 1.0), sync_ambilight);
+    });
+    let w = ui.as_weak();
+    ui.on_ambilight_reset(move || {
+        edit(&w.unwrap(), |cfg| cfg.profile_mut().ambilight.positions.clear(), sync_ambilight);
+    });
+    ui.on_ambilight_start(|| {
+        with_app(|app| {
+            let _ = app.tx.send(Request::AmbilightStart);
+        });
+    });
+    ui.on_ambilight_stop(|| {
+        with_app(|app| {
+            let _ = app.tx.send(Request::AmbilightStop);
+        });
     });
 
     // -- lcd
@@ -1679,7 +1815,9 @@ fn main() -> anyhow::Result<()> {
     let led_timer = Timer::default();
     led_timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
         let Some(ui) = w.upgrade() else { return };
-        if ui.get_page() != 2 {
+        let visible = ui.get_page() == 2 && ui.window().is_visible() && !ui.window().is_minimized();
+        with_app(|app| app.ambilight_preview_visible.store(visible && ui.get_uses_ambilight(), Ordering::Relaxed));
+        if !visible || ui.get_uses_ambilight() {
             return;
         }
         let zone = zone_id(&ui);
@@ -1726,10 +1864,16 @@ fn main() -> anyhow::Result<()> {
     if let (Some((_, out)), Some(window)) = (screenshot, offscreen) {
         // Fill in live data synchronously, since there's no event loop off-screen.
         if let Ok(mut c) = Client::connect() {
-            let tel = match c.request(&Request::Telemetry) {
+            let mut tel = match c.request(&Request::Telemetry) {
                 Ok(Response::Telemetry(t)) => Some(*t),
                 _ => None,
             };
+            if let Some(t) = tel.as_mut()
+                && t.ambilight.active
+                && let Ok(Response::AmbilightPreview(Some(state))) = c.request(&Request::AmbilightPreview(u64::MAX))
+            {
+                t.ambilight = *state;
+            }
             let cfg = match c.request(&Request::GetConfig) {
                 Ok(Response::Config(c)) => Some(*c),
                 _ => None,

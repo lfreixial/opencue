@@ -31,6 +31,9 @@ use opencue_core::telemetry::{ChannelState, DeviceState, LightingZone, Telemetry
 
 use crate::{actions, discord, media};
 
+#[path = "capture.rs"]
+mod capture;
+
 /// A gap this long between loop iterations means the machine was suspended.
 const RESUME_GAP: Duration = Duration::from_secs(5);
 const FRAME: Duration = Duration::from_millis(33);
@@ -45,6 +48,7 @@ pub struct Shared {
     /// Media commands for the MPRIS thread.
     media: mpsc::Sender<String>,
     discord: mpsc::Sender<discord::Request>,
+    ambilight: mpsc::Sender<bool>,
     epoch: Instant,
 }
 
@@ -55,6 +59,43 @@ impl Shared {
 
     fn config(&self) -> Config {
         self.config.read().unwrap().clone()
+    }
+
+    fn set_ambilight(&self, mut state: opencue_core::ambilight::CaptureState) {
+        self.telemetry(|t| {
+            state.sequence = t.ambilight.sequence.wrapping_add(1);
+            t.ambilight = state;
+        });
+    }
+
+    fn set_ambilight_frame(&self, frame: opencue_core::ambilight::ScreenFrame) {
+        self.telemetry(|t| {
+            if t.ambilight.active && t.ambilight.frame.as_ref() == Some(&frame) {
+                return;
+            }
+            t.ambilight = opencue_core::ambilight::CaptureState {
+                sequence: t.ambilight.sequence.wrapping_add(1),
+                active: true,
+                status: "Sharing monitor · Ambilight is live".into(),
+                frame: Some(frame),
+            };
+        });
+    }
+
+    fn telemetry_snapshot(&self) -> Telemetry {
+        // No screen pixels are needed for sensors, the CLI or hidden previews.
+        let mut snapshot = self.telemetry(|t| {
+            let frame = t.ambilight.frame.take();
+            let snapshot = t.clone();
+            t.ambilight.frame = frame;
+            snapshot
+        });
+        snapshot.config_rev = self.rev();
+        snapshot
+    }
+
+    fn ambilight_preview(&self, after: u64) -> Option<Box<opencue_core::ambilight::CaptureState>> {
+        self.telemetry(|t| (t.ambilight.sequence != after).then(|| Box::new(t.ambilight.clone())))
     }
 
     fn rev(&self) -> u64 {
@@ -170,12 +211,27 @@ fn zone_frame(
     sys: &SystemSensors,
 ) -> Vec<[u8; 3]> {
     let cfg = profile.lighting_for(zone);
+    if cfg.effect == opencue_core::config::Effect::Ambilight {
+        return sh.telemetry(|t| {
+            opencue_core::ambilight::render(t.ambilight.frame.as_ref(), &profile.ambilight, zone, cfg.brightness, leds)
+        });
+    }
     let pos = sh.effect_pos(zone, &cfg);
     lighting::render(&cfg, pos, leds, phase, sensor_value(cfg.sensor, liquid, sys))
 }
 
 fn zones_animated(profile: &Profile, zones: &[&str]) -> bool {
     zones.iter().any(|z| profile.lighting_for(z).effect.is_animated())
+}
+
+fn lighting_interval(profile: &Profile, zones: &[&str]) -> Duration {
+    if zones.iter().any(|z| profile.lighting_for(z).effect == opencue_core::config::Effect::Ambilight) {
+        Duration::from_nanos(1_000_000_000 / opencue_core::ambilight::FPS as u64)
+    } else if zones_animated(profile, zones) {
+        FRAME
+    } else {
+        Duration::from_millis(200)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -305,7 +361,7 @@ fn commander_core_loop(sh: &Shared, cc: &CommanderCore, zones: &[(u8, String)]) 
             last_color_write = now;
         }
 
-        let pause = if zones_animated(profile, &zone_ids) { FRAME } else { Duration::from_millis(200) };
+        let pause = lighting_interval(profile, &zone_ids);
         thread::sleep(pause.saturating_sub(now.elapsed()));
     }
     Ok(())
@@ -650,7 +706,7 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
                 pad.keepalive()?;
                 last_keepalive = now;
             }
-            let pause = if zones_animated(cfg.profile(), &["mm700"]) { FRAME } else { Duration::from_millis(200) };
+            let pause = lighting_interval(cfg.profile(), &["mm700"]);
             thread::sleep(pause.saturating_sub(now.elapsed()));
         }
         Ok(())
@@ -746,11 +802,7 @@ fn handle_client(sh: Arc<Shared>, stream: UnixStream) {
         let Ok(line) = line else { break };
         let response = match serde_json::from_str::<Request>(&line) {
             Err(e) => Response::Error(format!("bad request: {e}")),
-            Ok(Request::Telemetry) => {
-                let mut t = sh.telemetry(|t| t.clone());
-                t.config_rev = sh.rev();
-                Response::Telemetry(Box::new(t))
-            }
+            Ok(Request::Telemetry) => Response::Telemetry(Box::new(sh.telemetry_snapshot())),
             Ok(Request::GetConfig) => Response::Config(Box::new(sh.config())),
             Ok(Request::SetConfig(cfg)) => {
                 sh.set_config(*cfg);
@@ -772,6 +824,15 @@ fn handle_client(sh: Arc<Shared>, stream: UnixStream) {
                 let _ = sh.discord.send(discord::Request::Disconnect);
                 Response::Ok
             }
+            Ok(Request::AmbilightStart) => {
+                let _ = sh.ambilight.send(true);
+                Response::Ok
+            }
+            Ok(Request::AmbilightStop) => {
+                let _ = sh.ambilight.send(false);
+                Response::Ok
+            }
+            Ok(Request::AmbilightPreview(after)) => Response::AmbilightPreview(sh.ambilight_preview(after)),
             Ok(Request::Rescan) => {
                 sh.rescan.store(true, Ordering::Relaxed);
                 Response::Ok
@@ -861,6 +922,7 @@ pub fn run() -> Result<()> {
 
     let (media_tx, media_rx) = mpsc::channel();
     let (discord_tx, discord_rx) = mpsc::channel();
+    let (ambilight_tx, ambilight_rx) = mpsc::channel();
     let sh = Arc::new(Shared {
         config: RwLock::new(Config::load()),
         rev: AtomicU64::new(0),
@@ -870,6 +932,7 @@ pub fn run() -> Result<()> {
         nexus_page: AtomicUsize::new(0),
         media: media_tx,
         discord: discord_tx,
+        ambilight: ambilight_tx,
         epoch: Instant::now(),
     });
     start_ipc(sh.clone())?;
@@ -902,6 +965,11 @@ pub fn run() -> Result<()> {
         thread::Builder::new().name("discord".into()).spawn(move || {
             discord::run(|| sh.stopping(), |state| sh.telemetry(|t| t.discord = state.clone()), discord_rx)
         })?
+    };
+
+    let ambilight = {
+        let sh = sh.clone();
+        thread::Builder::new().name("ambilight".into()).spawn(move || capture::run(sh, ambilight_rx))?
     };
 
     let mut workers: HashMap<String, Worker> = HashMap::new();
@@ -968,6 +1036,55 @@ pub fn run() -> Result<()> {
     let _ = media.join();
     let _ = game_stats.join();
     let _ = discord.join();
+    let _ = ambilight.join();
     let _ = std::fs::remove_file(socket_path());
     Ok(())
+}
+
+#[cfg(test)]
+mod ambilight_tests {
+    use super::*;
+    use opencue_core::ambilight::{CaptureState, HEIGHT, ScreenFrame, WIDTH};
+    use opencue_core::config::Effect;
+
+    #[test]
+    fn preview_only_transfers_changed_frames_and_telemetry_omits_pixels() {
+        let sh = Shared {
+            config: RwLock::new(Config::default()),
+            rev: AtomicU64::new(0),
+            telemetry: Mutex::new(Telemetry::default()),
+            stop: Arc::new(AtomicBool::new(false)),
+            rescan: AtomicBool::new(false),
+            nexus_page: AtomicUsize::new(0),
+            media: mpsc::channel().0,
+            discord: mpsc::channel().0,
+            ambilight: mpsc::channel().0,
+            epoch: Instant::now(),
+        };
+        let frame = ScreenFrame { pixels: vec![[80, 20, 200]; WIDTH * HEIGHT] };
+        sh.set_ambilight_frame(frame.clone());
+        let state = sh.ambilight_preview(0).unwrap();
+        assert_eq!(state.frame.as_ref(), Some(&frame));
+        sh.set_ambilight_frame(frame.clone());
+        assert!(sh.ambilight_preview(state.sequence).is_none());
+        assert!(sh.telemetry_snapshot().ambilight.frame.is_none());
+        assert_eq!(sh.telemetry(|t| t.ambilight.frame.clone()), Some(frame));
+        sh.set_ambilight(CaptureState::default());
+        let stopped = sh.ambilight_preview(state.sequence).unwrap();
+        assert!(stopped.sequence > state.sequence);
+        assert!(!stopped.active && stopped.frame.is_none());
+    }
+
+    #[test]
+    fn ambilight_uses_sixty_hz_without_changing_other_effects() {
+        let mut profile = Profile::default();
+        assert_eq!(lighting_interval(&profile, &["cc:fan1"]), FRAME);
+        profile.lighting.insert("cc:fan1".into(), Lighting { effect: Effect::Ambilight, ..Default::default() });
+        let interval = lighting_interval(&profile, &["cc:fan1"]);
+        assert!(interval < Duration::from_millis(17));
+        assert!(interval >= Duration::from_millis(16));
+        assert_eq!(lighting_interval(&profile, &["mm700"]), FRAME);
+        profile.lighting.insert("*".into(), Lighting { effect: Effect::Off, ..Default::default() });
+        assert_eq!(lighting_interval(&profile, &["mm700"]), Duration::from_millis(200));
+    }
 }
