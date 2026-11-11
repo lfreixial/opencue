@@ -1,0 +1,18 @@
+post_install() {
+    cat <<'EOF'
+==> To start OpenCUE now and at every login, run as your user (not root):
+      systemctl --user enable --now opencue
+==> Then open OpenCUE from your app menu. Unplug and replug your Corsair devices
+    (or reboot) so the new device access rule applies.
+==> If you installed OpenCUE before with ./install.sh, remove that copy first:
+      ./install.sh --uninstall   (from the opencue folder)
+EOF
+}
+
+post_upgrade() {
+    echo "==> Restart OpenCUE to use the new version: systemctl --user restart opencue"
+}
+
+pre_remove() {
+    echo "==> Stop OpenCUE for your user first: systemctl --user disable --now opencue"
+}

@@ -46,6 +46,28 @@ Have another Corsair device? Open a [device support request](.github/ISSUE_TEMPL
 
 ## Install
 
+### Arch Linux (AUR)
+
+```sh
+yay -S opencue-bin                     # or paru, or any AUR helper
+systemctl --user enable --now opencue  # as your user, not root
+```
+
+Then unplug and replug your Corsair devices (or reboot) so the device access rule applies.
+
+### Any distro: prebuilt download
+
+For x86_64 Linux with glibc 2.36 or newer (Debian 12, Ubuntu 22.10, Fedora 37 and later). No Rust needed.
+
+```sh
+curl -fsSL https://github.com/lfreixial/opencue/releases/latest/download/opencue-x86_64-linux.tar.gz | tar xz
+cd opencue-linux
+./install.sh               # install to ~/.local/bin, start the service at login
+sudo ./install.sh --udev   # once: give your user access to the devices (no root at runtime)
+```
+
+### From source
+
 You need a Rust toolchain (`pacman -S rust`, `rustup`, or `mise use -g rust`).
 
 ```sh
@@ -55,18 +77,16 @@ cd opencue
 sudo ./install.sh --udev   # once: give your user access to the devices (no root at runtime)
 ```
 
+To update a download or source install, get the new version and run `./install.sh` again.
+
 Then open **OpenCUE** from your app menu, or run `opencue-gui`. It also opens minimized at login
 (`~/.config/autostart/opencue.desktop`); Settings has switches to turn that off or open the window normally.
 
-Uninstall:
+### Uninstall
 
-```sh
-systemctl --user disable --now opencue
-rm ~/.local/bin/opencue ~/.local/bin/opencue-gui ~/.config/systemd/user/opencue.service \
-   ~/.local/share/applications/opencue.desktop ~/.local/share/icons/hicolor/scalable/apps/opencue.svg \
-   ~/.config/autostart/opencue.desktop
-sudo rm /etc/udev/rules.d/70-opencue.rules
-```
+- AUR: `systemctl --user disable --now opencue`, then `sudo pacman -R opencue-bin`.
+- Download or source: `./install.sh --uninstall` from the same folder, then
+  `sudo rm /etc/udev/rules.d/70-opencue.rules`. Your settings stay in `~/.config/opencue`.
 
 ## Command line
 

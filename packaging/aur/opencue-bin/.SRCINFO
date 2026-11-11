@@ -1,0 +1,27 @@
+pkgbase = opencue-bin
+	pkgdesc = Open-source Corsair iCUE replacement: fan and pump curves, RGB, Elite LCD and iCUE NEXUS
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/lfreixial/opencue
+	install = opencue-bin.install
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = fontconfig
+	depends = freetype2
+	depends = libxkbcommon
+	depends = gcc-libs
+	depends = glibc
+	optdepends = wayland: run the app on Wayland
+	optdepends = libx11: run the app on X11
+	optdepends = libxcursor: run the app on X11
+	optdepends = libxi: run the app on X11
+	optdepends = xdg-desktop-portal: choose LCD images in the app
+	optdepends = mangohud: FPS and frame times for game stats on the Nexus
+	optdepends = curl: cover art for now playing
+	optdepends = ffmpeg: thumbnails for videos in now playing
+	provides = opencue
+	conflicts = opencue
+	source = opencue-0.1.1-x86_64-linux.tar.gz::https://github.com/lfreixial/opencue/releases/download/v0.1.1/opencue-x86_64-linux.tar.gz
+	sha256sums = SKIP
+
+pkgname = opencue-bin
