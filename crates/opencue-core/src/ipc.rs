@@ -32,6 +32,11 @@ pub enum Request {
     DiscordConnect,
     /// Forget the Discord login.
     DiscordDisconnect,
+    /// Open the desktop's monitor picker and capture until stopped or no longer needed.
+    AmbilightStart,
+    AmbilightStop,
+    /// Fetch a new preview only when its sequence has changed. Ordinary telemetry has no pixels.
+    AmbilightPreview(u64),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +45,7 @@ pub enum Response {
     Ok,
     Telemetry(Box<Telemetry>),
     Config(Box<Config>),
+    AmbilightPreview(Option<Box<crate::ambilight::CaptureState>>),
     Error(String),
 }
 

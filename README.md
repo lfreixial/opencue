@@ -9,8 +9,9 @@ the Elite LCD pump screen (including GIFs) and iCUE NEXUS touch shortcuts.
 
 - **Cooling**: Quiet / Balanced / Performance / Max / Fixed / Custom curves per fan and pump, following
   liquid, CPU or GPU temperature, with a draggable curve editor. Fans ramp up fast and down slowly.
-- **Lighting**: 12 effects (static, gradient, breathing, colour shift, rainbow, rainbow wave, colour wave,
-  spinner, marquee, twinkle, temperature-reactive and off) synced across devices or set per zone.
+- **Lighting**: 13 effects (static, gradient, breathing, colour shift, rainbow, rainbow wave, colour wave,
+  spinner, marquee, twinkle, temperature-reactive, Ambilight and off) synced across devices or set per zone.
+  **Ambilight** follows your monitor's colours, with draggable device positions and adjustable sampling areas.
 - **Pump LCD**: images and animated GIFs, or live liquid / CPU / GPU / pump-speed / dashboard / clock / text
   screens, with brightness and rotation.
 - **iCUE NEXUS**: pages of touch buttons that press key combos or media keys, run commands, open URLs, type
@@ -104,6 +105,34 @@ opencue daemon            run the service in the foreground (RUST_LOG=debug for 
 Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are copied into
 `~/.config/opencue/media/`.
 
+## Ambilight
+
+In **Lighting**, select **All devices** (or enable custom lighting for one zone), choose **Ambilight**,
+then click **Choose monitor…** and select a monitor in your desktop's screen-sharing dialog. Drag each
+device marker on the monitor preview to the area it should follow: devices on the left sample the left,
+devices on the right sample the right. The outlined boxes show the sampled areas; **Sample area** changes
+their size. Each device shows the average colour of its area, with the zone's brightness applied.
+Positions and sampling size are saved per profile. Grey markers belong to zones using another effect.
+
+Capture requires PipeWire, a desktop portal backend that supports screen sharing (such as KDE, GNOME or
+wlroots), and GStreamer tools, base plugins and the PipeWire plugin:
+
+```sh
+# Arch Linux
+sudo pacman -S gstreamer gst-plugins-base pipewire-gstreamer
+# Debian / Ubuntu
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-pipewire
+```
+
+Sharing targets 60 frames per second, using a small colour grid and dropping stale frames to keep
+latency low. The layout preview updates at 15 fps while visible; hiding it stops preview transfers.
+Sharing continues in the daemon when the app window closes. For performance testing, use optimized
+builds: `cargo run --release -p opencue -- daemon` and, in another terminal,
+`cargo run --release -p opencue-gui -- --page lighting`.
+Use **Stop sharing** or your desktop's sharing indicator to stop it. Capture also stops when the active
+profile no longer uses Ambilight. Choose the monitor again after restarting the daemon or ending sharing.
+Pixels stay in memory; no screen recordings are saved. Ambilight zones turn off when sharing ends.
+
 ## Troubleshooting
 
 - **The window opens (not minimized) at login on KDE Plasma**: Plasma restores apps that were open when
@@ -113,6 +142,9 @@ Settings live in `~/.config/opencue/config.json`. Images chosen for the LCD are 
   device (or reboot).
 - **Nexus shortcuts do nothing**: the udev rule also grants access to `/dev/uinput`, which is used to
   send key presses. Check the daemon log with `journalctl --user -u opencue`.
+- **Ambilight cannot share a monitor**: check the status under **Choose monitor…**. Install the capture
+  packages above and your desktop's screen-sharing portal backend; a file-picker-only portal backend
+  cannot capture a monitor. If sharing is cancelled or revoked, choose the monitor again.
 - **Now playing shows nothing**: the player has to support MPRIS. Spotify, browsers, VLC and most music
   players do; mpv needs the `mpv-mpris` plugin (`sudo pacman -S mpv-mpris`). Cover art from the web is
   downloaded with `curl`, and local videos without art get a thumbnail made with `ffmpeg`.

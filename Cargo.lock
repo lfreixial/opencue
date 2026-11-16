@@ -3375,8 +3375,10 @@ name = "opencue"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "async-io",
  "env_logger",
  "evdev",
+ "futures-lite",
  "libc",
  "log",
  "opencue-core",
@@ -3390,6 +3392,7 @@ name = "opencue-core"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "base64",
  "env_logger",
  "fontdue",
  "image",
