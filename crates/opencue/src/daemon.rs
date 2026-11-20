@@ -15,7 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use opencue_core::config::{Action, Config, LcdMode, Lighting, NexusMode, Profile, Sensor};
+use opencue_core::config::{Action, Config, LcdMode, Lighting, NexusMode, Profile, STRIMER_ATX, STRIMER_GPU, Sensor};
 use opencue_core::cooling::{DutyController, curve};
 use opencue_core::devices::commander_core::{self, CommanderCore, channel_name, led_device_name};
 use opencue_core::devices::lcd_cap::LcdCap;
@@ -191,7 +191,7 @@ const MM700_PHASE: f32 = 0.5;
 
 /// Strimer cables: zone id, name, and the offset waves get on it.
 const STRIMER_ZONES: [(Cable, &str, &str, f32); 2] =
-    [(Cable::Atx, "strimer:atx", "Strimer 24-pin", 0.25), (Cable::Gpu, "strimer:gpu", "Strimer GPU", 0.75)];
+    [(Cable::Atx, STRIMER_ATX, "Strimer 24-pin", 0.25), (Cable::Gpu, STRIMER_GPU, "Strimer GPU", 0.75)];
 
 /// The clock for a zone being (re)connected: its own if it had one, otherwise another zone's, so
 /// a device that turns up later shows the same moment of an effect as the rest.
@@ -752,22 +752,28 @@ fn run_strimer(sh: &Shared, found: &Found) -> Result<()> {
             let cfg = sh.config();
             let profile = cfg.profile();
             let (liquid, sys) = sh.telemetry(|t| (t.liquid_temp, t.system.clone()));
+            let all = profile.lighting_for("*");
+            // Linked cables show the same moment of an effect, so they share the 24-pin's offset.
+            let linked = profile.strimer_linked;
             // Effects the controller has built in run there, smoothly; the rest are drawn here.
             let shows: Vec<Show> = STRIMER_ZONES
                 .iter()
-                .map(|&(cable, id, _, phase)| match Builtin::for_lighting(&profile.lighting_for(id)) {
-                    Some(builtin) => Show::Builtin(builtin),
-                    None => Show::Frame(zone_frame(sh, profile, id, cable.leds(), phase, liquid, &sys)),
+                .map(|&(cable, id, _, phase)| {
+                    let phase = if linked { STRIMER_ZONES[0].3 } else { phase };
+                    match Builtin::for_lighting(&profile.lighting_for(id), &all) {
+                        Some(builtin) => Show::Builtin(builtin),
+                        None => Show::Frame(zone_frame(sh, profile, id, cable.leds(), phase, liquid, &sys)),
+                    }
                 })
                 .collect();
-            if last.as_ref() != Some(&shows) || now - last_write > Duration::from_secs(5) {
-                strimer.show(&shows[0], &shows[1])?;
+            if last.as_ref() != Some(&shows) || now - last_write > Duration::from_secs(5) || strimer.confirm_due() {
+                strimer.show(&shows[0], &shows[1], linked)?;
                 last = Some(shows);
                 last_write = now;
             }
             let drawn: Vec<&str> = STRIMER_ZONES
                 .iter()
-                .filter(|z| Builtin::for_lighting(&profile.lighting_for(z.1)).is_none())
+                .filter(|z| Builtin::for_lighting(&profile.lighting_for(z.1), &all).is_none())
                 .map(|z| z.1)
                 .collect();
             let pause = lighting_interval(profile, &drawn);

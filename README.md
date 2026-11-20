@@ -12,6 +12,8 @@ the Elite LCD pump screen (including GIFs) and iCUE NEXUS touch shortcuts.
 - **Lighting**: 13 effects (static, gradient, breathing, colour shift, rainbow, rainbow wave, colour wave,
   spinner, marquee, twinkle, temperature-reactive, Ambilight and off) synced across devices or set per zone.
   **Ambilight** follows your monitor's colours, with draggable device positions and adjustable sampling areas.
+  **Lian Li Strimer** cables also get 16 animations of their own (Ping pong, Meteor, Runway and more),
+  in your "All devices" colours or their own, with the two cables linked or set separately.
 - **Pump LCD**: images and animated GIFs, or live liquid / CPU / GPU / pump-speed / dashboard / clock / text
   screens, with brightness and rotation.
 - **iCUE NEXUS**: pages of touch buttons that press key combos or media keys, run commands, open URLs, type
