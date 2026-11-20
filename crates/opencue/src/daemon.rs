@@ -21,7 +21,7 @@ use opencue_core::devices::commander_core::{self, CommanderCore, channel_name, l
 use opencue_core::devices::lcd_cap::LcdCap;
 use opencue_core::devices::mm700::{self, Mm700};
 use opencue_core::devices::nexus::{Nexus, Touch};
-use opencue_core::devices::strimer::{Cable, Strimer};
+use opencue_core::devices::strimer::{Builtin, Cable, Show, Strimer};
 use opencue_core::devices::{Found, Kind, discover};
 use opencue_core::gamestats::{self, LogTracker};
 use opencue_core::ipc::{Request, Response, socket_path};
@@ -745,22 +745,32 @@ fn run_strimer(sh: &Shared, found: &Found) -> Result<()> {
         }
     });
     let result = (|| -> Result<()> {
-        let mut last: Option<Vec<Vec<[u8; 3]>>> = None;
+        let mut last: Option<Vec<Show>> = None;
         let mut last_write = Instant::now();
         while !sh.stopping() {
             let now = Instant::now();
             let cfg = sh.config();
+            let profile = cfg.profile();
             let (liquid, sys) = sh.telemetry(|t| (t.liquid_temp, t.system.clone()));
-            let frames: Vec<Vec<[u8; 3]>> = STRIMER_ZONES
+            // Effects the controller has built in run there, smoothly; the rest are drawn here.
+            let shows: Vec<Show> = STRIMER_ZONES
                 .iter()
-                .map(|&(cable, id, _, phase)| zone_frame(sh, cfg.profile(), id, cable.leds(), phase, liquid, &sys))
+                .map(|&(cable, id, _, phase)| match Builtin::for_lighting(&profile.lighting_for(id)) {
+                    Some(builtin) => Show::Builtin(builtin),
+                    None => Show::Frame(zone_frame(sh, profile, id, cable.leds(), phase, liquid, &sys)),
+                })
                 .collect();
-            if last.as_ref() != Some(&frames) || now - last_write > Duration::from_secs(5) {
-                strimer.write_colors(&frames[0], &frames[1])?;
-                last = Some(frames);
+            if last.as_ref() != Some(&shows) || now - last_write > Duration::from_secs(5) {
+                strimer.show(&shows[0], &shows[1])?;
+                last = Some(shows);
                 last_write = now;
             }
-            let pause = lighting_interval(cfg.profile(), &ids);
+            let drawn: Vec<&str> = STRIMER_ZONES
+                .iter()
+                .filter(|z| Builtin::for_lighting(&profile.lighting_for(z.1)).is_none())
+                .map(|z| z.1)
+                .collect();
+            let pause = lighting_interval(profile, &drawn);
             thread::sleep(pause.saturating_sub(now.elapsed()));
         }
         Ok(())
