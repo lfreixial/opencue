@@ -60,7 +60,9 @@ impl Builtin {
     }
 
     fn data(self) -> [u8; 4] {
-        [self.mode, self.speed, if self.reverse { 0x00 } else { 0x01 }, self.brightness]
+        // Direction 0 runs the wave from the top of the cable down (LED 0 is at the bottom), the
+        // way OpenCUE draws it; reverse runs it upward.
+        [self.mode, self.speed, u8::from(self.reverse), self.brightness]
     }
 }
 
@@ -232,9 +234,9 @@ mod tests {
     fn moving_rainbows_run_on_the_controller() {
         let wave = Lighting { effect: Effect::RainbowWave, ..Default::default() };
         let b = Builtin::for_lighting(&wave).unwrap();
-        assert_eq!(b.data(), [MODE_RAINBOW, 0x00, 0x01, 0x00]);
+        assert_eq!(b.data(), [MODE_RAINBOW, 0x00, 0x00, 0x00]);
         let slow_dim = Lighting { speed: 1, brightness: 30, reverse: true, ..wave };
-        assert_eq!(Builtin::for_lighting(&slow_dim).unwrap().data(), [MODE_RAINBOW, 0x02, 0x00, 0x03]);
+        assert_eq!(Builtin::for_lighting(&slow_dim).unwrap().data(), [MODE_RAINBOW, 0x02, 0x01, 0x03]);
         let fast = Lighting { effect: Effect::Rainbow, speed: 100, ..Default::default() };
         assert_eq!(Builtin::for_lighting(&fast).unwrap().data()[..2], [MODE_RAINBOW_MORPH, 0xff]);
         for effect in [Effect::Static, Effect::Spinner, Effect::Ambilight, Effect::Temperature] {
