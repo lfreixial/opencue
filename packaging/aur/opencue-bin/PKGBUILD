@@ -1,7 +1,7 @@
 # Maintainer: Luis Freixial
 
 pkgname=opencue-bin
-pkgver=0.1.2
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Open-source Corsair iCUE replacement: fan and pump curves, RGB, Elite LCD and iCUE NEXUS"
 arch=('x86_64')
@@ -24,7 +24,7 @@ conflicts=('opencue')
 install=opencue-bin.install
 # The release's prebuilt download, so AUR installs show up in its download count.
 source=("opencue-$pkgver-x86_64-linux.tar.gz::$url/releases/download/v$pkgver/opencue-x86_64-linux.tar.gz")
-sha256sums=('220e1a0fc31681606c1654902e273bbb830012e7b8652454caa7d61bd18baf2e')
+sha256sums=('5c236d00de164b0b21eed5529cde13aa1682ff2682208da4512bd8c351929a23')
 
 package() {
     cd opencue-linux
