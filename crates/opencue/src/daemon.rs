@@ -15,12 +15,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use opencue_core::config::{Action, Config, LcdMode, Lighting, NexusMode, Profile, Sensor};
+use opencue_core::config::{Action, Config, LcdMode, Lighting, NexusMode, Profile, STRIMER_ATX, STRIMER_GPU, Sensor};
 use opencue_core::cooling::{DutyController, curve};
 use opencue_core::devices::commander_core::{self, CommanderCore, channel_name, led_device_name};
 use opencue_core::devices::lcd_cap::LcdCap;
 use opencue_core::devices::mm700::{self, Mm700};
 use opencue_core::devices::nexus::{Nexus, Touch};
+use opencue_core::devices::strimer::{Builtin, Cable, Show, Strimer};
 use opencue_core::devices::{Found, Kind, discover};
 use opencue_core::gamestats::{self, LogTracker};
 use opencue_core::ipc::{Request, Response, socket_path};
@@ -187,6 +188,10 @@ fn cc_phase(i: usize, n: usize) -> f32 {
 }
 
 const MM700_PHASE: f32 = 0.5;
+
+/// Strimer cables: zone id, name, and the offset waves get on it.
+const STRIMER_ZONES: [(Cable, &str, &str, f32); 2] =
+    [(Cable::Atx, STRIMER_ATX, "Strimer 24-pin", 0.25), (Cable::Gpu, STRIMER_GPU, "Strimer GPU", 0.75)];
 
 /// The clock for a zone being (re)connected: its own if it had one, otherwise another zone's, so
 /// a device that turns up later shows the same moment of an effect as the rest.
@@ -719,6 +724,71 @@ fn run_mm700(sh: &Shared, found: &Found) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Lian Li Strimer Plus V2 cables
+
+fn run_strimer(sh: &Shared, found: &Found) -> Result<()> {
+    let strimer = Strimer::open(&found.info)?;
+    sh.set_device(DeviceState {
+        key: device_key(found),
+        kind: Kind::Strimer,
+        name: "Lian Li Strimer Plus V2".into(),
+        firmware: "-".into(),
+        serial: found.info.serial.clone(),
+        error: None,
+    });
+    let ids: Vec<&str> = STRIMER_ZONES.iter().map(|z| z.1).collect();
+    sh.telemetry(|t| {
+        for &(cable, id, name, phase) in &STRIMER_ZONES {
+            let clock = zone_clock(t, id);
+            t.zones.retain(|z| z.id != id);
+            t.zones.push(LightingZone { id: id.into(), name: name.into(), leds: cable.leds(), phase, clock });
+        }
+    });
+    let result = (|| -> Result<()> {
+        let mut last: Option<Vec<Show>> = None;
+        let mut last_write = Instant::now();
+        while !sh.stopping() {
+            let now = Instant::now();
+            let cfg = sh.config();
+            let profile = cfg.profile();
+            let (liquid, sys) = sh.telemetry(|t| (t.liquid_temp, t.system.clone()));
+            let all = profile.lighting_for("*");
+            // Linked cables show the same moment of an effect, so they share the 24-pin's offset.
+            let linked = profile.strimer_linked;
+            // Effects the controller has built in run there, smoothly; the rest are drawn here.
+            let shows: Vec<Show> = STRIMER_ZONES
+                .iter()
+                .map(|&(cable, id, _, phase)| {
+                    let phase = if linked { STRIMER_ZONES[0].3 } else { phase };
+                    match Builtin::for_lighting(&profile.lighting_for(id), &all) {
+                        Some(builtin) => Show::Builtin(builtin),
+                        None => Show::Frame(zone_frame(sh, profile, id, cable.leds(), phase, liquid, &sys)),
+                    }
+                })
+                .collect();
+            if last.as_ref() != Some(&shows) || now - last_write > Duration::from_secs(5) || strimer.confirm_due() {
+                strimer.show(&shows[0], &shows[1], linked)?;
+                last = Some(shows);
+                last_write = now;
+            }
+            let drawn: Vec<&str> = STRIMER_ZONES
+                .iter()
+                .filter(|z| Builtin::for_lighting(&profile.lighting_for(z.1), &all).is_none())
+                .map(|z| z.1)
+                .collect();
+            let pause = lighting_interval(profile, &drawn);
+            thread::sleep(pause.saturating_sub(now.elapsed()));
+        }
+        Ok(())
+    })();
+    if sh.stopping() && sh.config().settings.restore_hardware_on_exit {
+        strimer.restore_hardware_mode();
+    }
+    sh.telemetry(|t| t.zones.retain(|z| !ids.contains(&z.id.as_str())));
+    result
+}
+
+// ---------------------------------------------------------------------------------------------
 // Media players (MPRIS)
 
 /// Tracks the active player while the Nexus shows it, and runs media commands at any time.
@@ -895,6 +965,7 @@ fn spawn_worker(sh: &Arc<Shared>, f: Found, has_lcd: bool) -> Result<Worker> {
                 Kind::LcdCap => run_lcd(&sh, &f),
                 Kind::Nexus => run_nexus(&sh, &f),
                 Kind::Mm700 => run_mm700(&sh, &f),
+                Kind::Strimer => run_strimer(&sh, &f),
             }))
             .unwrap_or_else(|panic| {
                 let msg = panic

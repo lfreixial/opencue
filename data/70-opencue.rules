@@ -1,6 +1,9 @@
-# OpenCUE: let the logged-in desktop user talk to Corsair HID devices (no root needed).
+# OpenCUE: let the logged-in desktop user talk to its RGB and cooling HID devices (no root needed).
 # Must sort before 73-seat-late.rules for TAG+="uaccess" to take effect.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", TAG+="uaccess"
+
+# Lian Li Strimer Plus V2 controller (ENE).
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0cf2", ATTRS{idProduct}=="a200", TAG+="uaccess"
 
 # Virtual keyboard used by iCUE NEXUS shortcuts.
 KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

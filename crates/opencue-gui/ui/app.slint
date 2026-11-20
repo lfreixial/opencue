@@ -355,6 +355,11 @@ export component AppWindow inherits Window {
     in-out property <color> color1;
     in-out property <color> color2;
     in property <int> color-count;
+    in property <bool> strimer-effect;
+    in-out property <bool> follow-colors;
+    in property <bool> is-strimer;
+    in property <bool> strimer-linked;
+    callback strimer-linked-toggled(bool);
     in property <bool> uses-sensor;
     in-out property <float> speed;
     in-out property <float> brightness;
@@ -740,6 +745,14 @@ export component AppWindow inherits Window {
                             toggled => { root.zone-custom-toggled(self.checked); }
                         }
                     }
+                    if root.is-strimer: HorizontalLayout {
+                        spacing: 10px;
+                        Switch {
+                            text: "Same animation on both cables";
+                            checked: root.strimer-linked;
+                            toggled => { root.strimer-linked-toggled(self.checked); }
+                        }
+                    }
                     if root.selected-zone > 0 && !root.zone-custom: Text {
                         text: "This zone follows the “All devices” settings.";
                         color: Theme.muted;
@@ -754,6 +767,17 @@ export component AppWindow inherits Window {
                                 current-index <=> root.effect-index;
                                 selected => { root.lighting-changed(); }
                             }
+                        }
+                        if root.strimer-effect: CheckBox {
+                            text: "Use the “All devices” colours";
+                            checked <=> root.follow-colors;
+                            toggled => { root.lighting-changed(); }
+                        }
+                        if root.strimer-effect && root.follow-colors: Text {
+                            text: "Runs on the Strimer controller, in the colours set on “All devices” (a rainbow when that has none). The preview shows those colours.";
+                            color: Theme.muted;
+                            wrap: word-wrap;
+                            font-size: 13px;
                         }
                         if root.color-count >= 1: HorizontalLayout {
                             spacing: 16px;
@@ -884,30 +908,34 @@ export component AppWindow inherits Window {
                     }
                     Rectangle { vertical-stretch: 1; horizontal-stretch: 1; }
                     if !root.uses-ambilight: Label { text: "PREVIEW"; }
-                    if !root.uses-ambilight: Rectangle {
+                    if !root.uses-ambilight: leds := Rectangle {
                         height: 44px;
                         border-radius: 8px;
                         background: #0b0b10;
-                        HorizontalLayout {
-                            padding: 10px;
-                            spacing: 4px;
-                            alignment: center;
-                            for c in root.led-preview: Rectangle {
-                                width: 22px;
-                                height: 22px;
-                                // The glow is a gradient, not a drop shadow: shadows are re-blurred
-                                // whenever the colour changes, which is every frame for most effects.
-                                // Fades out 4px past the dot, so it never covers its neighbours. The
-                                // gradient's 100% is the box corner: 52% is the dot's edge, 70% the box's.
-                                Rectangle {
-                                    width: 30px;
-                                    height: 30px;
-                                    background: @radial-gradient(circle, c.with-alpha(0.6) 50%, c.with-alpha(0) 70%);
-                                }
-                                Rectangle {
-                                    border-radius: 11px;
-                                    background: c;
-                                }
+                        // Dots shrink to fit when a zone has more LEDs than fit at full size (the
+                        // Strimer's GPU cable has 27). Placed by hand rather than with a layout, so
+                        // the dots never make the panel wider.
+                        property <int> count: max(1, root.led-preview.length);
+                        property <length> gap: 4px;
+                        property <length> dot: min(22px, (self.width - 20px - (count - 1) * gap) / count);
+                        property <length> span: count * dot + (count - 1) * gap;
+                        for c[i] in root.led-preview: Rectangle {
+                            x: (leds.width - leds.span) / 2 + i * (leds.dot + leds.gap);
+                            y: (leds.height - leds.dot) / 2;
+                            width: leds.dot;
+                            height: leds.dot;
+                            // The glow is a gradient, not a drop shadow: shadows are re-blurred
+                            // whenever the colour changes, which is every frame for most effects.
+                            // Fades out 4px past the dot, so it never covers its neighbours. The
+                            // gradient's 100% is the box corner: 52% is the dot's edge, 70% the box's.
+                            Rectangle {
+                                width: leds.dot * 30 / 22;
+                                height: leds.dot * 30 / 22;
+                                background: @radial-gradient(circle, c.with-alpha(0.6) 50%, c.with-alpha(0) 70%);
+                            }
+                            Rectangle {
+                                border-radius: leds.dot / 2;
+                                background: c;
                             }
                         }
                     }

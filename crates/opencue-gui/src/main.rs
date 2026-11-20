@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use image::RgbaImage;
 use opencue_core::config::{
     Action, ChannelCooling, Config, DISCORD_ACTIONS, Effect, FanMode, GameMetric, LcdMode, Lighting, NexusButton,
-    NexusMode, NexusPage, Preset, Sensor, format_color, media_dir, parse_color,
+    NexusMode, NexusPage, Preset, STRIMER_ATX, STRIMER_GPU, Sensor, format_color, media_dir, parse_color,
 };
 use opencue_core::cooling::curve;
 use opencue_core::gamestats::{self, MangoHudStatus};
@@ -144,6 +144,7 @@ fn temp_range(s: Sensor) -> (f32, f32) {
 fn color_count(e: Effect) -> i32 {
     match e {
         Effect::Off | Effect::Rainbow | Effect::RainbowWave | Effect::Ambilight => 0,
+        e if e.strimer_only() => 0, // unless the zone picks its own (see sync_lighting)
         Effect::Static => 1,
         _ => 2,
     }
@@ -388,16 +389,30 @@ fn sync_dashboard(ui: &AppWindow) {
             (false, _) => d.status.clone(),
         }));
         ui.set_discord_has_app(opencue_core::discord::load_credentials().is_some());
+    });
+    sync_zones(ui);
+    sync_ambilight(ui);
+}
 
-        // Lighting zones follow what the daemon discovered.
+/// Lighting zones follow what the daemon discovered. Linked Strimer cables are one zone.
+fn sync_zones(ui: &AppWindow) {
+    with_app(|app| {
+        let linked = app.cfg.profile().strimer_linked;
         let mut zones = vec![Zone { id: ss("*"), name: ss("All devices") }];
-        zones.extend(t.zones.iter().map(|z| Zone { id: ss(&z.id), name: ss(&z.name) }));
+        zones.extend(app.tel.zones.iter().filter(|z| !(linked && z.id == STRIMER_GPU)).map(|z| Zone {
+            id: ss(&z.id),
+            name: ss(if linked && z.id == STRIMER_ATX { "Strimer (both cables)" } else { &z.name }),
+        }));
         let current: Vec<Zone> = ui.get_zones().iter().collect();
         if current != zones {
+            let selected = current.get(ui.get_selected_zone().max(0) as usize).map(|z| z.id.to_string());
+            // Keep the same zone selected; a GPU cable that was just linked becomes the pair.
+            let selected = selected.map(|id| if linked && id == STRIMER_GPU { STRIMER_ATX.to_string() } else { id });
+            let index = selected.and_then(|id| zones.iter().position(|z| z.id == id.as_str())).unwrap_or(0);
             ui.set_zones(ModelRc::new(VecModel::from(zones)));
+            ui.set_selected_zone(index as i32);
         }
     });
-    sync_ambilight(ui);
 }
 
 fn sync_ambilight(ui: &AppWindow) {
@@ -532,11 +547,17 @@ fn sync_lighting(ui: &AppWindow) {
         let p = app.cfg.profile();
         let l = p.lighting_for(&zone);
         ui.set_zone_custom(p.lighting.contains_key(&zone));
-        ui.set_effect_names(strings(Effect::ALL.iter().map(|e| e.label())));
-        ui.set_effect_index(Effect::ALL.iter().position(|e| *e == l.effect).unwrap_or(0) as i32);
+        let effects = Effect::for_zone(&zone);
+        ui.set_effect_names(strings(effects.iter().map(|e| e.label())));
+        ui.set_effect_index(effects.iter().position(|e| *e == l.effect).unwrap_or(0) as i32);
+        ui.set_strimer_effect(l.effect.strimer_only());
         ui.set_color1(to_color(l.colors.first().map_or("#ffffff", |s| s)));
         ui.set_color2(to_color(l.colors.get(1).map_or("#000000", |s| s)));
-        ui.set_color_count(color_count(l.effect));
+        let own = l.effect.strimer_only() && l.own_colors;
+        ui.set_color_count(if own { 2 } else { color_count(l.effect) });
+        ui.set_follow_colors(!l.own_colors);
+        ui.set_is_strimer(zone.starts_with("strimer:"));
+        ui.set_strimer_linked(p.strimer_linked);
         ui.set_uses_sensor(l.effect == Effect::Temperature);
         ui.set_uses_ambilight(l.effect == Effect::Ambilight);
         ui.set_speed(l.speed as f32);
@@ -882,7 +903,8 @@ fn edit_button(ui: &AppWindow, f: impl FnOnce(&mut NexusButton)) {
 
 /// Read the lighting controls back into a `Lighting`.
 fn lighting_from_ui(ui: &AppWindow) -> Lighting {
-    let effect = Effect::ALL[(ui.get_effect_index().max(0) as usize).min(Effect::ALL.len() - 1)];
+    let effects = Effect::for_zone(&zone_id(ui));
+    let effect = effects[(ui.get_effect_index().max(0) as usize).min(effects.len() - 1)];
     Lighting {
         effect,
         colors: vec![from_color(ui.get_color1()), from_color(ui.get_color2())],
@@ -890,6 +912,7 @@ fn lighting_from_ui(ui: &AppWindow) -> Lighting {
         brightness: ui.get_brightness().round().clamp(0.0, 100.0) as u8,
         sensor: sensor_from(ui.get_light_sensor()),
         reverse: ui.get_reverse(),
+        own_colors: !ui.get_follow_colors(),
     }
 }
 
@@ -1338,6 +1361,12 @@ fn main() -> anyhow::Result<()> {
             },
             sync_lighting,
         );
+    });
+    let w = ui.as_weak();
+    ui.on_strimer_linked_toggled(move |on| {
+        let ui = w.unwrap();
+        edit(&ui, |cfg| cfg.profile_mut().strimer_linked = on, sync_zones);
+        sync_lighting(&ui);
     });
     let w = ui.as_weak();
     ui.on_lighting_changed(move || {
@@ -1823,7 +1852,11 @@ fn main() -> anyhow::Result<()> {
         let zone = zone_id(&ui);
         with_app(|app| {
             let p = app.cfg.profile();
-            let l = p.lighting_for(&zone);
+            let mut l = p.lighting_for(&zone);
+            if l.effect.strimer_only() {
+                let palette = opencue_core::devices::strimer::palette_for(&l, &p.lighting_for("*"));
+                l.colors = palette.iter().map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect();
+            }
             let n = app.tel.zones.iter().find(|z| z.id == zone).map_or(24, |z| z.leds).clamp(1, 34);
             let temp = match l.sensor {
                 Sensor::Liquid => app.tel.liquid_temp,
@@ -1880,6 +1913,19 @@ fn main() -> anyhow::Result<()> {
             };
             on_poll(&ui, tel.is_some(), tel, cfg);
             sync_all(&ui);
+        }
+        // `--zone <id>` shows that lighting zone, e.g. `--screenshot lighting out.png --zone strimer:gpu`.
+        if let Some(i) = arg("--zone", 1).and_then(|id| ui.get_zones().iter().position(|z| z.id == id.as_str())) {
+            ui.set_selected_zone(i as i32);
+            sync_lighting(&ui);
+            with_app(|app| {
+                let p = app.cfg.profile();
+                let zone = zone_id(&ui);
+                let l = p.lighting_for(&zone);
+                let n = app.tel.zones.iter().find(|z| z.id == zone).map_or(24, |z| z.leds).clamp(1, 34);
+                let frame = lighting::render(&l, 0.0, n, 0.0, None);
+                update_model(&app.leds, frame.into_iter().map(|[r, g, b]| Color::from_rgb_u8(r, g, b)).collect());
+            });
         }
         return screenshot::capture(&ui, &window, &out);
     }

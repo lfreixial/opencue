@@ -89,6 +89,23 @@ pub enum Effect {
     Twinkle,
     Temperature,
     Ambilight,
+    // Animations built into the Lian Li Strimer controller; only the Strimer zones offer them.
+    Snooker,
+    Mixing,
+    PingPong,
+    Runway,
+    Painting,
+    Tide,
+    BlowUp,
+    Meteor,
+    ColorTransfer,
+    FadeOut,
+    Contest,
+    CrossOver,
+    Parallel,
+    ShockWave,
+    Ripple,
+    Drizzling,
 }
 
 impl Effect {
@@ -108,6 +125,39 @@ impl Effect {
         Effect::Ambilight,
     ];
 
+    /// The Strimer controller's own animations. They use the "All devices" colours.
+    pub const STRIMER: [Effect; 16] = [
+        Effect::Snooker,
+        Effect::Mixing,
+        Effect::PingPong,
+        Effect::Runway,
+        Effect::Painting,
+        Effect::Tide,
+        Effect::BlowUp,
+        Effect::Meteor,
+        Effect::ColorTransfer,
+        Effect::FadeOut,
+        Effect::Contest,
+        Effect::CrossOver,
+        Effect::Parallel,
+        Effect::ShockWave,
+        Effect::Ripple,
+        Effect::Drizzling,
+    ];
+
+    /// The effects a zone can choose from.
+    pub fn for_zone(zone: &str) -> Vec<Effect> {
+        let mut effects = Effect::ALL.to_vec();
+        if zone.starts_with("strimer:") {
+            effects.extend(Effect::STRIMER);
+        }
+        effects
+    }
+
+    pub fn strimer_only(self) -> bool {
+        Effect::STRIMER.contains(&self)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Effect::Off => "Off",
@@ -123,11 +173,29 @@ impl Effect {
             Effect::Twinkle => "Twinkle",
             Effect::Temperature => "Temperature",
             Effect::Ambilight => "Ambilight",
+            Effect::Snooker => "Snooker",
+            Effect::Mixing => "Mixing",
+            Effect::PingPong => "Ping pong",
+            Effect::Runway => "Runway",
+            Effect::Painting => "Painting",
+            Effect::Tide => "Tide",
+            Effect::BlowUp => "Blow up",
+            Effect::Meteor => "Meteor",
+            Effect::ColorTransfer => "Color transfer",
+            Effect::FadeOut => "Fade out",
+            Effect::Contest => "Contest",
+            Effect::CrossOver => "Cross over",
+            Effect::Parallel => "Parallel",
+            Effect::ShockWave => "Shock wave",
+            Effect::Ripple => "Ripple",
+            Effect::Drizzling => "Drizzling",
         }
     }
 
+    /// Whether OpenCUE redraws it over time. The Strimer's animations run on the controller and
+    /// are drawn as a still palette anywhere else.
     pub fn is_animated(self) -> bool {
-        !matches!(self, Effect::Off | Effect::Static | Effect::Gradient)
+        !matches!(self, Effect::Off | Effect::Static | Effect::Gradient) && !self.strimer_only()
     }
 }
 
@@ -142,6 +210,8 @@ pub struct Lighting {
     pub brightness: u8,
     pub sensor: Sensor,
     pub reverse: bool,
+    /// For the Strimer's own animations: use `colors` instead of the "All devices" colours.
+    pub own_colors: bool,
 }
 
 impl Default for Lighting {
@@ -153,6 +223,7 @@ impl Default for Lighting {
             brightness: 100,
             sensor: Sensor::Liquid,
             reverse: false,
+            own_colors: false,
         }
     }
 }
@@ -231,11 +302,17 @@ impl Default for LcdConfig {
 pub struct Profile {
     /// Keys are "pump", "fan1".."fan6".
     pub cooling: BTreeMap<String, ChannelCooling>,
-    /// Keys are zone ids ("cc:pump", "cc:fan1", "mm700"); "*" applies to zones without their own entry.
+    /// Keys are zone ids ("cc:pump", "cc:fan1", "mm700", "strimer:atx"); "*" applies to zones without their own entry.
     pub lighting: BTreeMap<String, Lighting>,
     pub lcd: LcdConfig,
     pub ambilight: crate::ambilight::Layout,
+    /// Both Strimer cables use the 24-pin's lighting and start their animations together.
+    pub strimer_linked: bool,
 }
+
+/// Lighting zone of the Strimer's 24-pin cable, which both cables use when they are linked.
+pub const STRIMER_ATX: &str = "strimer:atx";
+pub const STRIMER_GPU: &str = "strimer:gpu";
 
 impl Default for Profile {
     fn default() -> Self {
@@ -249,12 +326,19 @@ impl Default for Profile {
             lighting: BTreeMap::from([("*".into(), Lighting::default())]),
             lcd: LcdConfig::default(),
             ambilight: Default::default(),
+            strimer_linked: false,
         }
     }
 }
 
 impl Profile {
+    /// The zone whose lighting settings `zone` uses: itself, apart from a linked Strimer GPU cable.
+    pub fn lighting_zone<'a>(&self, zone: &'a str) -> &'a str {
+        if self.strimer_linked && zone == STRIMER_GPU { STRIMER_ATX } else { zone }
+    }
+
     pub fn lighting_for(&self, zone: &str) -> Lighting {
+        let zone = self.lighting_zone(zone);
         self.lighting.get(zone).or_else(|| self.lighting.get("*")).cloned().unwrap_or_default()
     }
 

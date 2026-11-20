@@ -60,6 +60,10 @@ impl Layout {
             .copied()
             .unwrap_or_else(|| match zone {
                 "mm700" => Position { x: 0.5, y: 0.9 },
+                // Where the cables usually run: the 24-pin up the right of the board, the GPU
+                // cable across the middle.
+                "strimer:atx" => Position { x: 0.75, y: 0.4 },
+                "strimer:gpu" => Position { x: 0.5, y: 0.65 },
                 "cc:pump" => Position { x: 0.5, y: 0.5 },
                 _ => {
                     if let Some(n @ 1..=6) = zone.strip_prefix("cc:fan").and_then(|s| s.parse::<usize>().ok()) {

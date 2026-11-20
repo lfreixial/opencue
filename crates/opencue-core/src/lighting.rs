@@ -105,6 +105,23 @@ pub fn render(cfg: &Lighting, pos: f64, n: usize, phase: f32, temp: Option<f32>)
         Effect::Off | Effect::Ambilight => vec![[0, 0, 0]; n],
         Effect::Static => vec![c0; n],
         Effect::Gradient => (0..n).map(|i| gradient(&colors, pos(i), false)).collect(),
+        // Run by the Strimer controller itself; here (the app's preview) just its palette.
+        Effect::Snooker
+        | Effect::Mixing
+        | Effect::PingPong
+        | Effect::Runway
+        | Effect::Painting
+        | Effect::Tide
+        | Effect::BlowUp
+        | Effect::Meteor
+        | Effect::ColorTransfer
+        | Effect::FadeOut
+        | Effect::Contest
+        | Effect::CrossOver
+        | Effect::Parallel
+        | Effect::ShockWave
+        | Effect::Ripple
+        | Effect::Drizzling => (0..n).map(|i| gradient(&colors, pos(i), true)).collect(),
         Effect::Breathing => {
             let cycle = tt * 0.25;
             let idx = cycle.floor().rem_euclid(colors.len() as f32) as usize;
@@ -214,7 +231,7 @@ mod tests {
 
     #[test]
     fn every_effect_renders_n_leds() {
-        for e in Effect::ALL {
+        for e in Effect::ALL.into_iter().chain(Effect::STRIMER) {
             let cfg = Lighting { effect: e, ..Default::default() };
             assert_eq!(render(&cfg, 1.234, 24, 0.3, Some(35.0)).len(), 24);
         }

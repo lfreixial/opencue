@@ -26,7 +26,7 @@ pub struct DeviceState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LightingZone {
-    /// "cc:pump", "cc:fan1", "mm700"
+    /// "cc:pump", "cc:fan1", "mm700", "strimer:atx"
     pub id: String,
     pub name: String,
     pub leds: usize,

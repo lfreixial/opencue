@@ -12,7 +12,7 @@ if [[ "${1:-}" == "--udev" ]]; then
     install -Dm644 data/70-opencue.rules /etc/udev/rules.d/70-opencue.rules
     udevadm control --reload-rules
     udevadm trigger --subsystem-match=hidraw --subsystem-match=misc
-    echo "udev rule installed. Corsair devices are now accessible to the logged-in user."
+    echo "udev rule installed. Supported devices are now accessible to the logged-in user."
     exit 0
 fi
 
