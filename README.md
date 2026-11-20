@@ -42,8 +42,9 @@ the Elite LCD pump screen (including GIFs) and iCUE NEXUS touch shortcuts.
 | Elite LCD pump screen | `1b1c:0c39`, `1b1c:0c33` | Tested on 0c39 |
 | iCUE NEXUS | `1b1c:1b8e` | Tested |
 | MM700 RGB mousepad | `1b1c:1b9b`, `1b1c:1bc9` | Tested on 1b9b |
+| Lian Li Strimer Plus V2 controller (24-pin and 8-pin GPU cables) | `0cf2:a200` | Tested (24-pin + triple 8-pin) |
 
-Have another Corsair device? Open a [device support request](.github/ISSUE_TEMPLATE/device_request.md).
+Have another device? Open a [device support request](.github/ISSUE_TEMPLATE/device_request.md).
 
 ## Install
 
@@ -54,7 +55,7 @@ yay -S opencue-bin                     # or paru, or any AUR helper
 systemctl --user enable --now opencue  # as your user, not root
 ```
 
-Then unplug and replug your Corsair devices (or reboot) so the device access rule applies.
+Then unplug and replug your devices (or reboot) so the device access rule applies.
 
 ### Any distro: prebuilt download
 
@@ -96,7 +97,7 @@ Then open **OpenCUE** from your app menu, or run `opencue-gui`. It also opens mi
 
 ```
 opencue status            temperatures, fan speeds and devices
-opencue devices           Corsair USB devices and whether OpenCUE can access them
+opencue devices           supported USB devices and whether OpenCUE can access them
 opencue profile [NAME]    list profiles, or switch to NAME
 opencue rescan            look for newly plugged-in devices now
 opencue daemon            run the service in the foreground (RUST_LOG=debug for detail)
@@ -182,5 +183,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) to build from source or add a device.
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-OpenCUE is an independent project and is not affiliated with, endorsed by, or sponsored by Corsair.
+OpenCUE is an independent project and is not affiliated with, endorsed by, or sponsored by Corsair or Lian Li.
 Corsair, iCUE, Elite Capellix and iCUE NEXUS are trademarks of CORSAIR MEMORY, Inc.
+Lian Li and Strimer are trademarks of Lian Li Industrial Co., Ltd.

@@ -6,7 +6,7 @@ mod discord;
 mod media;
 
 use anyhow::{Context, Result, bail};
-use opencue_core::devices::discover;
+use opencue_core::devices::{discover, is_known_vendor};
 use opencue_core::hidraw::{HidDevice, enumerate};
 use opencue_core::ipc::{Client, Request, Response};
 use opencue_core::render::fmt_temp;
@@ -18,7 +18,7 @@ USAGE:
     opencue daemon            run the background service (normally started by systemd)
     opencue gui               open the control app
     opencue status            show temperatures, fan speeds and devices
-    opencue devices           list Corsair USB devices and whether they are accessible
+    opencue devices           list supported USB devices and whether they are accessible
     opencue profile [NAME]    list profiles, or switch to NAME
     opencue rescan            look for newly connected devices now
     opencue discord ACTION    mute, deafen, camera, screenshare or leave (e.g. for a keyboard shortcut)
@@ -68,7 +68,7 @@ fn status() -> Result<()> {
 
 fn devices() {
     let supported: Vec<_> = discover().into_iter().map(|f| (f.info.path.clone(), f.kind)).collect();
-    for info in enumerate(Some(0x1b1c)) {
+    for info in enumerate(None).into_iter().filter(is_known_vendor) {
         let kind = supported.iter().find(|(p, _)| *p == info.path).map(|(_, k)| format!("{k:?}"));
         let access = match HidDevice::open(&info) {
             Ok(_) => "ok".to_string(),

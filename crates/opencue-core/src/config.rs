@@ -231,7 +231,7 @@ impl Default for LcdConfig {
 pub struct Profile {
     /// Keys are "pump", "fan1".."fan6".
     pub cooling: BTreeMap<String, ChannelCooling>,
-    /// Keys are zone ids ("cc:pump", "cc:fan1", "mm700"); "*" applies to zones without their own entry.
+    /// Keys are zone ids ("cc:pump", "cc:fan1", "mm700", "strimer:atx"); "*" applies to zones without their own entry.
     pub lighting: BTreeMap<String, Lighting>,
     pub lcd: LcdConfig,
     pub ambilight: crate::ambilight::Layout,
