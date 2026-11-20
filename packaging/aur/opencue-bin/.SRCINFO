@@ -1,6 +1,6 @@
 pkgbase = opencue-bin
 	pkgdesc = Open-source Corsair iCUE replacement: fan and pump curves, RGB, Elite LCD and iCUE NEXUS
-	pkgver = 0.1.2
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/lfreixial/opencue
 	install = opencue-bin.install
@@ -16,12 +16,15 @@ pkgbase = opencue-bin
 	optdepends = libxcursor: run the app on X11
 	optdepends = libxi: run the app on X11
 	optdepends = xdg-desktop-portal: choose LCD images in the app
+	optdepends = gstreamer: Ambilight screen capture tools
+	optdepends = gst-plugins-base: Ambilight video conversion and scaling
+	optdepends = pipewire-gstreamer: Ambilight monitor capture (requires a ScreenCast portal backend)
 	optdepends = mangohud: FPS and frame times for game stats on the Nexus
 	optdepends = curl: update notifications and cover art for now playing
 	optdepends = ffmpeg: thumbnails for videos in now playing
 	provides = opencue
 	conflicts = opencue
-	source = opencue-0.1.2-x86_64-linux.tar.gz::https://github.com/lfreixial/opencue/releases/download/v0.1.2/opencue-x86_64-linux.tar.gz
-	sha256sums = 220e1a0fc31681606c1654902e273bbb830012e7b8652454caa7d61bd18baf2e
+	source = opencue-0.2.0-x86_64-linux.tar.gz::https://github.com/lfreixial/opencue/releases/download/v0.2.0/opencue-x86_64-linux.tar.gz
+	sha256sums = 5c236d00de164b0b21eed5529cde13aa1682ff2682208da4512bd8c351929a23
 
 pkgname = opencue-bin
